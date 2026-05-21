@@ -317,7 +317,6 @@ function openEndModal(won, reveal) {
   }
 
   // Cross-game prompt
-  const modal = document.querySelector('#end-modal .modal');
   const existingCross = modal.querySelector('.cross-game-prompt');
   if (!existingCross) {
     const crossGame = document.createElement('div');

@@ -64,7 +64,14 @@ function renderGame() {
   const remaining = puzzle.comments.filter(c => !foundIds.has(c.id));
 
   container.innerHTML = `
-    <p class="ftt-instruction">Find 4 comments from the same Reddit post.</p>
+    <div class="ftt-header-row">
+      <p class="ftt-instruction">Find 4 comments from the same Reddit post.</p>
+      <div class="ftt-inline-strikes">
+        <span class="strike-pip ${gameState.strikes > 0 ? 'used' : ''}" title="Strike 1"></span>
+        <span class="strike-pip ${gameState.strikes > 1 ? 'used' : ''}" title="Strike 2"></span>
+        <span class="strike-pip ${gameState.strikes > 2 ? 'used' : ''}" title="Strike 3"></span>
+      </div>
+    </div>
     <div id="found-groups"></div>
     <div class="ftt-board" id="comment-board"></div>
     <div class="ftt-controls">
@@ -128,15 +135,24 @@ function renderBoard(comments) {
   });
 }
 
+function cleanCommentBody(body) {
+  // Strip bare URLs (they're unreadable as card text)
+  return body
+    .replace(/https?:\/\/\S+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function buildCommentCard(comment) {
   const card = document.createElement('button');
   card.className = 'ftt-card';
   card.dataset.id = comment.id;
   if (selectedIds.has(comment.id)) card.classList.add('selected');
 
-  const truncated = comment.body.length > 160
-    ? comment.body.slice(0, 157) + '…'
-    : comment.body;
+  const cleaned = cleanCommentBody(comment.body);
+  const truncated = cleaned.length > 130
+    ? cleaned.slice(0, 127) + '…'
+    : cleaned;
 
   card.innerHTML = `
     <span class="ftt-card-body">${escapeHtml(truncated)}</span>
@@ -170,6 +186,7 @@ function renderCompletedShell() {
 
 function syncStrikes() {
   const current = gameState?.strikes ?? 0;
+  // Header dots
   for (let i = 0; i < 3; i++) {
     const dot = document.getElementById(`strike-${i}`);
     if (!dot) continue;
@@ -182,6 +199,14 @@ function syncStrikes() {
       dot.classList.remove('used', 'newly-used');
     }
   }
+  // Inline strike pips in game board
+  document.querySelectorAll('.strike-pip').forEach((pip, i) => {
+    pip.classList.toggle('used', i < current);
+    if (i < current && !pip.classList.contains('newly-used')) {
+      pip.classList.add('newly-used');
+      setTimeout(() => pip.classList.remove('newly-used'), 450);
+    }
+  });
 }
 
 function updateControls() {

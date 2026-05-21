@@ -144,9 +144,10 @@ function isEligibleComment(c) {
   if (c.stickied) return false;
   if (c.author === 'AutoModerator' || c.author === '[deleted]') return false;
   if (!(c.parent_id ?? '').startsWith('t3_')) return false; // top-level only
-  // Skip comments that are mostly links or quotes
-  const linkCount = (body.match(/https?:\/\//g) ?? []).length;
-  if (linkCount >= 2) return false;
+  // Reject if stripping URLs leaves less than 20 chars of real text
+  const bodyWithoutUrls = body.replace(/https?:\/\/\S+/g, '').replace(/\s+/g, ' ').trim();
+  if (bodyWithoutUrls.length < 20) return false;
+  // Skip quote-heavy replies
   const quoteLines = body.split('\n').filter(l => l.startsWith('&gt;') || l.startsWith('>'));
   if (quoteLines.length > 2) return false;
   return true;
