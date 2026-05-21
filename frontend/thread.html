@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>WhatTheSub — Daily Reddit Puzzle</title>
-  <meta name="description" content="Guess which subreddit each post came from. One new puzzle every day.">
-  <meta property="og:title" content="WhatTheSub">
-  <meta property="og:description" content="A daily Reddit guessing game. Can you spot the subreddit?">
+  <title>Find the Thread — Daily Reddit Puzzle</title>
+  <meta name="description" content="Group 16 Reddit comments by their original post. One new puzzle every day.">
+  <meta property="og:title" content="Find the Thread">
+  <meta property="og:description" content="Can you group these Reddit comments by their source post?">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400&family=Lora:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
@@ -17,7 +17,7 @@
   <header class="masthead">
     <div class="masthead-top">
       <div>
-        <h1 class="masthead-title">WhatTheSub</h1>
+        <h1 class="masthead-title">Find the Thread</h1>
         <p class="masthead-tagline">A daily Reddit puzzle</p>
       </div>
       <div>
@@ -31,8 +31,8 @@
     </div>
     <nav class="masthead-nav">
       <a href="/home.html">Home</a>
-      <a href="/" class="active">Today</a>
-      <a href="/thread.html">Find the Thread</a>
+      <a href="/thread.html" class="active">Today</a>
+      <a href="/index.html">WhatTheSub</a>
       <button class="nav-auth-btn" id="auth-nav-btn" onclick="openAuthModal()">Sign In</button>
     </nav>
   </header>
@@ -94,9 +94,9 @@
   </div>
 
   <script src="/js/config.js"></script>
-  <script src="/js/storage.js"></script>
+  <script src="/js/thread-storage.js"></script>
   <script src="/js/api.js"></script>
   <script src="/js/auth.js"></script>
-  <script src="/js/game.js"></script>
+  <script src="/js/thread-game.js"></script>
 </body>
 </html>

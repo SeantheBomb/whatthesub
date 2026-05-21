@@ -48,3 +48,16 @@ CREATE TABLE IF NOT EXISTS feature_flags (
   value   INTEGER DEFAULT 0,
   PRIMARY KEY (user_id, flag)
 );
+
+-- Phase 3: Find the Thread game results
+CREATE TABLE IF NOT EXISTS thread_results (
+  id           TEXT PRIMARY KEY,
+  user_id      TEXT REFERENCES users(id),
+  puzzle_date  TEXT NOT NULL,
+  status       TEXT NOT NULL,  -- 'won' | 'lost'
+  strikes      INTEGER DEFAULT 0,
+  groups_found INTEGER DEFAULT 0,
+  duration_sec INTEGER,
+  created_at   TEXT DEFAULT (datetime('now')),
+  UNIQUE(user_id, puzzle_date)
+);

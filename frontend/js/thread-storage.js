@@ -1,8 +1,8 @@
-// All localStorage interactions for WhatTheSub guest state.
+// localStorage state for Find the Thread game.
 
-const Storage = (() => {
-  const GAME_KEY = date => `wts_game_${date}`;
-  const STATS_KEY = 'wts_stats';
+const ThreadStorage = (() => {
+  const GAME_KEY  = date => `ftt_game_${date}`;
+  const STATS_KEY = 'ftt_stats';
 
   function getStats() {
     try {
@@ -32,20 +32,13 @@ const Storage = (() => {
     localStorage.setItem(GAME_KEY(date), JSON.stringify(state));
   }
 
-  function initGame(date, puzzle) {
+  function initGame(date) {
     return {
       date,
       status: 'playing',
       strikes: 0,
       max_strikes: 3,
-      current_round: 0,
-      rounds: puzzle.rounds.map(r => ({
-        id: r.id,
-        status: 'pending',   // 'pending' | 'correct' | 'skipped'
-        guesses: [],          // wrong guesses for this specific round
-        correct_subreddit: null,
-      })),
-      remaining_options: [...puzzle.options],
+      found_groups: [],  // [{ post_index, subreddit, post_title, post_url, post_images }]
       started_at: new Date().toISOString(),
       completed_at: null,
     };
@@ -62,7 +55,6 @@ const Storage = (() => {
       const gapDays = lastDate
         ? Math.round((today - lastDate) / 86400000)
         : null;
-
       stats.current_streak = gapDays === 1 ? stats.current_streak + 1 : 1;
       if (stats.current_streak > stats.max_streak) {
         stats.max_streak = stats.current_streak;
@@ -75,21 +67,9 @@ const Storage = (() => {
     saveStats(stats);
   }
 
-  function getGameHistory() {
-    const history = [];
-    for (const key of Object.keys(localStorage)) {
-      if (!key.startsWith('wts_game_')) continue;
-      try {
-        const game = JSON.parse(localStorage.getItem(key));
-        if (game?.status && game.status !== 'playing') history.push(game);
-      } catch { /* skip corrupted entries */ }
-    }
-    return history.sort((a, b) => b.date.localeCompare(a.date));
-  }
-
   function clearGame(date) {
     localStorage.removeItem(GAME_KEY(date));
   }
 
-  return { getStats, saveStats, getGame, saveGame, initGame, updateStatsAfterGame, getGameHistory, clearGame };
+  return { getStats, getGame, saveGame, initGame, updateStatsAfterGame, clearGame };
 })();

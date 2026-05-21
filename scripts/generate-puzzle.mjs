@@ -1,4 +1,18 @@
-// ── Subreddit pool (starting point only — chain can go anywhere) ─────────────
+#!/usr/bin/env node
+// Runs in GitHub Actions (or locally) — no Cloudflare subrequest limits apply here.
+// Generates today's puzzle and writes it directly to KV via the REST API.
+//
+// Usage:
+//   node scripts/generate-puzzle.mjs [YYYY-MM-DD]
+//
+// Required env:
+//   CLOUDFLARE_API_TOKEN  — CF token with Workers KV Storage Write permission
+
+const ACCOUNT_ID    = '82fcff5fb1a0de92c409f86edd495985';
+const KV_NAMESPACE  = '010130a100d74b3f9e43f6147ed22444';
+const PUZZLE_TTL    = 90000; // seconds (~25 hours)
+
+// ── Subreddit pool ────────────────────────────────────────────────────────────
 const DEFAULT_POOL = [
   'AskReddit', 'worldnews', 'gaming', 'technology', 'science',
   'movies', 'Music', 'sports', 'food', 'Cooking',
@@ -14,33 +28,26 @@ const DEFAULT_POOL = [
   'nottheonion', 'facepalm', 'blackpeopletwitter', 'whitepeopletwitter', 'gifs',
 ];
 
-// ── Posts from these subreddits are never used ───────────────────────────────
 const BLOCKLIST = new Set([
   'nsfw', 'gonewild', 'nofap', 'drugs', 'darkjokes', 'teenagers',
   'subredditdrama', 'SubredditDrama', 'metareddit', 'redditmeta',
   'announcements', 'changelog', 'blog',
 ]);
 
-// ── Stop words excluded from keyword extraction ───────────────────────────────
 const STOP_WORDS = new Set([
-  // Articles / determiners
   'a','an','the','this','that','these','those','some','any','all','both',
   'each','few','more','most','other','such','no','own','same',
-  // Pronouns
   'i','me','my','myself','we','our','ours','you','your','yours','he','him',
   'his','himself','she','her','hers','herself','it','its','itself','they',
   'them','their','theirs','what','which','who','whom',
-  // Aux verbs
   'am','is','are','was','were','be','been','being','have','has','had',
   'having','do','does','did','doing','will','would','could','should','may',
   'might','must','shall','can',
-  // Prepositions / conjunctions
   'at','by','for','with','about','against','between','into','through',
   'during','before','after','above','below','from','up','down','in','out',
   'off','over','under','again','further','once','to','of','on','and','but',
   'or','nor','so','yet','as','while','because','if','unless','until','when',
   'where','why','how','than',
-  // High-frequency filler (4+ chars)
   'also','here','there','then','ever','just','very','only','well','back',
   'like','know','take','came','made','come','make','good','true','sure',
   'went','done','said','time','year','look','life','want','need','feel',
@@ -50,7 +57,6 @@ const STOP_WORDS = new Set([
   'people','really','always','already','since','quite','maybe','their',
   'right','today','point','place','years','start','first','last','even',
   'much','many','another','without','through','between','around','almost',
-  // Reddit-specific noise
   'reddit','upvote','downvote','karma','post','comment','thread','repost',
   'crosspost','subreddit','redditor','update','edit','tldr','rant','story',
   'title','caption','context','question','literally','basically','actually',
@@ -60,7 +66,6 @@ const STOP_WORDS = new Set([
   'number','second','third','nothing',
 ]);
 
-// ── Prefixes stripped before display and keyword extraction ───────────────────
 const TITLE_PREFIXES = [
   /^TIFU\s+by\s+/i,
   /^AITA\s+(for|if|that|when)\s+/i,
@@ -110,28 +115,25 @@ function seededShuffle(arr, seed) {
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-// ── Title cleaning ────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 function cleanTitle(title) {
   let t = title.trim();
   for (const pat of TITLE_PREFIXES) {
     const stripped = t.replace(pat, '').trim();
     if (stripped.length >= 15) { t = stripped; break; }
   }
-  // Capitalise first letter after stripping
   return t.charAt(0).toUpperCase() + t.slice(1);
 }
 
-// ── Keyword extraction ────────────────────────────────────────────────────────
 function extractKeywords(title) {
   const words = title
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, ' ')
     .split(/\s+/)
     .filter(w => w.length >= 4 && !STOP_WORDS.has(w) && !/^\d+$/.test(w));
-  return [...new Set(words)]; // deduplicate
+  return [...new Set(words)];
 }
 
-// ── Post eligibility ──────────────────────────────────────────────────────────
 function isEligible(post) {
   if (!post) return false;
   const sub = post.subreddit.toLowerCase();
@@ -144,22 +146,18 @@ function isEligible(post) {
     post.score >= 50 &&
     post.title.length >= 20 &&
     post.title.length <= 300 &&
-    // Title mustn't contain the subreddit name (dead giveaway)
     !title.includes(`r/${sub}`) &&
     !title.includes(`/r/${sub}`)
   );
 }
 
-// ── Image extraction ──────────────────────────────────────────────────────────
 function extractImages(post) {
-  // Gallery post — ordered list of images from media_metadata
   if (post.is_gallery && post.gallery_data?.items && post.media_metadata) {
     const urls = post.gallery_data.items
       .filter(item => !item.is_deleted)
       .map(item => {
         const meta = post.media_metadata[item.media_id];
         if (!meta || meta.status !== 'valid' || !['Image', 'AnimatedImage'].includes(meta.e)) return null;
-        // Use the largest preview size to avoid downloading full-res files
         const previews = meta.p ?? [];
         const best = previews[previews.length - 1];
         const url = best?.u ?? meta.s?.u;
@@ -169,19 +167,17 @@ function extractImages(post) {
     if (urls.length) return urls;
   }
 
-  // Direct image post (i.redd.it)
   if (post.post_hint === 'image' && /\.(jpg|jpeg|png|gif|webp)(\?|$)/i.test(post.url ?? '')) {
     return [post.url];
   }
 
-  // Reddit preview CDN — covers link posts with OG images, crossposted images, etc.
   const src = post.preview?.images?.[0]?.source?.url;
   if (typeof src === 'string' && src.startsWith('https://')) return [src];
 
   return null;
 }
 
-// ── Reddit fetch helpers ──────────────────────────────────────────────────────
+// ── Reddit fetch ──────────────────────────────────────────────────────────────
 const REDDIT_HEADERS = {
   'User-Agent': 'WhatTheSub/1.0 daily-puzzle-game (github.com/SeantheBomb/whatthesub)',
 };
@@ -207,14 +203,8 @@ async function searchForPost(keyword, usedSubs, rng) {
     if (!res.ok) return null;
     const data = await res.json();
     const posts = (data?.data?.children ?? []).map(p => p.data);
-
-    const eligible = posts.filter(p =>
-      !usedSubs.has(p.subreddit.toLowerCase()) &&
-      isEligible(p)
-    );
-
+    const eligible = posts.filter(p => !usedSubs.has(p.subreddit.toLowerCase()) && isEligible(p));
     if (!eligible.length) return null;
-    // Seeded pick from up to the top 5 eligible results
     return eligible[Math.floor(rng() * Math.min(eligible.length, 5))];
   } catch (err) {
     console.error(`searchForPost(${keyword}):`, err.message);
@@ -272,24 +262,16 @@ async function tryUnifiedChain(keyword, seedRound, seed) {
 }
 
 // ── Puzzle generation ─────────────────────────────────────────────────────────
-async function generatePuzzle(date, env) {
+async function generatePuzzle(date) {
   const seed = dateToSeed(date);
   const rng = mulberry32(seed);
-
-  // Admin-configurable starting pool
-  let pool = DEFAULT_POOL;
-  try {
-    const custom = await env.PUZZLES.get('config:subreddit_pool');
-    if (custom) pool = JSON.parse(custom);
-  } catch { /* use default */ }
-
-  const shuffledPool = seededShuffle(pool, seed);
+  const shuffledPool = seededShuffle(DEFAULT_POOL, seed);
   const rounds = [];
   const usedSubs = new Set();
-  const keywordPool = [];   // all keywords extracted from accumulated posts
+  const keywordPool = [];
   const usedKeywords = new Set();
 
-  // ── Step 1: Seed from pool ─────────────────────────────────────────────────
+  // Step 1: seed from pool
   for (const sub of shuffledPool) {
     const post = await fetchHotPost(sub);
     if (!post) continue;
@@ -343,24 +325,16 @@ async function generatePuzzle(date, env) {
   let attempts = 0;
   while (rounds.length < 6 && attempts < 50) {
     attempts++;
-
     const available = keywordPool.filter(k => !usedKeywords.has(k));
-    if (!available.length) {
-      console.error('[chain] keyword pool exhausted');
-      break;
-    }
+    if (!available.length) { console.error('[chain] keyword pool exhausted'); break; }
 
     const keyword = available[Math.floor(rng() * available.length)];
     usedKeywords.add(keyword);
-
     console.error(`[chain] searching "${keyword}" (attempt ${attempts}, have ${rounds.length}/6)`);
     await sleep(300);
 
     const post = await searchForPost(keyword, usedSubs, rng);
-    if (!post) {
-      console.error(`[chain] no eligible post for "${keyword}"`);
-      continue;
-    }
+    if (!post) { console.error(`[chain] no eligible post for "${keyword}"`); continue; }
 
     const display = cleanTitle(post.title);
     rounds.push({
@@ -372,14 +346,12 @@ async function generatePuzzle(date, env) {
       linking_keyword: keyword,
     });
     usedSubs.add(post.subreddit.toLowerCase());
-
     const newKeywords = extractKeywords(display);
     keywordPool.push(...newKeywords);
-
     console.error(`[chain] r/${post.subreddit} via "${keyword}" → "${display.slice(0, 60)}"`);
   }
 
-  // ── Fallback: fill remaining slots from pool ───────────────────────────────
+  // Fallback: fill from pool
   if (rounds.length < 6) {
     console.error(`[fallback] chain got ${rounds.length}/6 — filling from pool`);
     for (const sub of shuffledPool) {
@@ -406,46 +378,45 @@ async function generatePuzzle(date, env) {
   return { date, puzzle_type: 'chained', unified_keyword: null, rounds, shuffled_options, generated_at: new Date().toISOString() };
 }
 
-// ── Worker export ─────────────────────────────────────────────────────────────
-export default {
-  async scheduled(event, env) {
-    const date = new Date().toISOString().slice(0, 10);
-    console.error(`[WhatTheSub] Generating puzzle for ${date}`);
-    try {
-      const puzzle = await generatePuzzle(date, env);
-      await env.PUZZLES.put(`puzzle:${date}`, JSON.stringify(puzzle), { expirationTtl: 90000 });
-      console.error(`[WhatTheSub] Stored puzzle — type: ${puzzle.puzzle_type}, keyword: ${puzzle.unified_keyword ?? 'n/a'}, rounds: ${
-        puzzle.rounds.map(r => r.linking_keyword ? `"${r.linking_keyword}"→${r.subreddit}` : r.subreddit).join(' | ')
-      }`);
-    } catch (err) {
-      console.error('[WhatTheSub] Generation failed:', err.message);
-    }
-  },
+// ── KV write ──────────────────────────────────────────────────────────────────
+async function writeToKV(date, puzzle) {
+  const token = process.env.CLOUDFLARE_API_TOKEN;
+  if (!token) throw new Error('CLOUDFLARE_API_TOKEN env var is required');
 
-  async fetch(request, env) {
-    const { pathname, searchParams } = new URL(request.url);
+  const url = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/storage/kv/namespaces/${KV_NAMESPACE}/values/puzzle%3A${date}?expiration_ttl=${PUZZLE_TTL}`;
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(puzzle),
+  });
+  const body = await res.json();
+  if (!body.success) throw new Error(`KV write failed: ${JSON.stringify(body.errors)}`);
+  console.error(`[kv] stored puzzle:${date}`);
+}
 
-    if (pathname === '/generate' && request.method === 'POST') {
-      const date = searchParams.get('date') || new Date().toISOString().slice(0, 10);
-      try {
-        const puzzle = await generatePuzzle(date, env);
-        await env.PUZZLES.put(`puzzle:${date}`, JSON.stringify(puzzle), { expirationTtl: 90000 });
-        return Response.json({
-          ok: true,
-          date,
-          puzzle_type: puzzle.puzzle_type,
-          unified_keyword: puzzle.unified_keyword ?? null,
-          rounds: puzzle.rounds.map(r => ({
-            subreddit: r.subreddit,
-            linking_keyword: r.linking_keyword ?? null,
-            title: r.post_title,
-          })),
-        });
-      } catch (err) {
-        return Response.json({ ok: false, error: err.message }, { status: 500 });
-      }
-    }
+// ── Main ──────────────────────────────────────────────────────────────────────
+const args = process.argv.slice(2);
+const jsonOnly = args.includes('--json-only');
+const date = args.find(a => !a.startsWith('--')) ?? new Date().toISOString().slice(0, 10);
 
-    return new Response('WhatTheSub Daily Worker — POST /generate?date=YYYY-MM-DD to trigger', { status: 200 });
-  },
-};
+if (!jsonOnly) console.error(`[WhatTheSub] Generating puzzle for ${date}`);
+
+try {
+  const puzzle = await generatePuzzle(date);
+  if (jsonOnly) {
+    // Output JSON to stdout for piping to wrangler kv put
+    process.stdout.write(JSON.stringify(puzzle));
+  } else {
+    console.error(`[WhatTheSub] Generated — chain: ${
+      puzzle.rounds.map(r => r.linking_keyword ? `"${r.linking_keyword}"→${r.subreddit}` : r.subreddit).join(' | ')
+    }`);
+    await writeToKV(date, puzzle);
+    console.error('[WhatTheSub] Done.');
+  }
+} catch (err) {
+  console.error('[WhatTheSub] Failed:', err.message);
+  process.exit(1);
+}

@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Daily Reddit Puzzles</title>
+  <meta name="description" content="Two daily Reddit puzzles. New puzzles every day.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400&family=Lora:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+  <header class="masthead">
+    <div class="masthead-top">
+      <div>
+        <h1 class="masthead-title">Daily Puzzles</h1>
+        <p class="masthead-tagline">Reddit-powered brain teasers</p>
+      </div>
+      <div>
+        <p class="masthead-date" id="today-date"></p>
+      </div>
+    </div>
+    <nav class="masthead-nav">
+      <a href="/home.html" class="active">Home</a>
+      <a href="/index.html">WhatTheSub</a>
+      <a href="/thread.html">Find the Thread</a>
+    </nav>
+  </header>
+
+  <main>
+    <p class="page-subheader" id="date-subheader">Today's puzzles</p>
+
+    <div class="home-grid" id="game-grid">
+      <!-- Cards injected by JS -->
+    </div>
+
+    <hr class="section-divider" style="margin-top: 2rem;">
+    <p style="text-align:center; font-size:0.78rem; color:var(--muted); font-style:italic; margin-top:1rem;">
+      New puzzles every day at midnight UTC.
+    </p>
+  </main>
+
+  <script>
+    const today = new Date().toISOString().slice(0, 10);
+
+    document.getElementById('today-date').textContent = new Date().toLocaleDateString('en-US', {
+      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+    });
+
+    document.getElementById('date-subheader').textContent =
+      new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }) + '\'s puzzles';
+
+    const games = [
+      {
+        name: 'WhatTheSub',
+        desc: 'Six hot posts from six subreddits. Guess which post came from which community.',
+        href: '/index.html',
+        storageKey: `wts_game_${today}`,
+      },
+      {
+        name: 'Find the Thread',
+        desc: '16 Reddit comments from 4 different posts — shuffled. Group them by where they came from.',
+        href: '/thread.html',
+        storageKey: `ftt_game_${today}`,
+      },
+    ];
+
+    const grid = document.getElementById('game-grid');
+
+    games.forEach(g => {
+      let status = 'not-played';
+      let statusLabel = 'Play now';
+
+      try {
+        const saved = JSON.parse(localStorage.getItem(g.storageKey));
+        if (saved && saved.status === 'won') {
+          status = 'played';
+          statusLabel = '✓ Completed';
+        } else if (saved && saved.status === 'lost') {
+          status = 'played';
+          statusLabel = '✗ Game over';
+        } else if (saved && saved.status === 'playing') {
+          status = 'not-played';
+          statusLabel = 'In progress…';
+        }
+      } catch { /* ignore */ }
+
+      const card = document.createElement('a');
+      card.className = 'game-card';
+      card.href = g.href;
+      card.innerHTML = `
+        <div class="game-card-name">${g.name}</div>
+        <div class="game-card-desc">${g.desc}</div>
+        <span class="game-card-status ${status}">${statusLabel}</span>
+      `;
+      grid.appendChild(card);
+    });
+  </script>
+</body>
+</html>

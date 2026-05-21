@@ -44,5 +44,41 @@ const API = (() => {
     return get(`/api/leaderboard/${type}`);
   }
 
-  return { fetchPuzzle, submitGuess, revealAnswers, fetchLeaderboard };
+  async function saveResult(date, status, strikes, rounds_won, duration_sec) {
+    const token = typeof Auth !== 'undefined' ? Auth.getToken() : null;
+    if (!token) return;
+    return fetch(base() + '/api/game/result', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ date, status, strikes, rounds_won, duration_sec }),
+    });
+  }
+
+  // ── Find the Thread ──────────────────────────────────────────────────────────
+
+  function fetchThread(date) {
+    const qs = date ? `?date=${date}` : '';
+    return get(`/api/thread/today${qs}`);
+  }
+
+  function submitThreadGuess(date, group) {
+    return post('/api/thread/guess', { date, group });
+  }
+
+  function revealThread(date) {
+    return get(`/api/thread/reveal?date=${encodeURIComponent(date)}`);
+  }
+
+  async function saveThreadResult(date, status, strikes, groups_found, duration_sec) {
+    const token = typeof Auth !== 'undefined' ? Auth.getToken() : null;
+    if (!token) return;
+    return fetch(base() + '/api/thread/result', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ date, status, strikes, groups_found, duration_sec }),
+    });
+  }
+
+  return { fetchPuzzle, submitGuess, revealAnswers, fetchLeaderboard, saveResult,
+           fetchThread, submitThreadGuess, revealThread, saveThreadResult };
 })();

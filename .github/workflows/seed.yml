@@ -1,16 +1,32 @@
-name: Seed Daily Puzzle
+name: Seed Daily Puzzles
 
 on:
   schedule:
     - cron: '5 0 * * *'   # 00:05 UTC — just after midnight
   workflow_dispatch:        # also triggerable manually from the Actions tab
+    inputs:
+      date:
+        description: 'Date to generate (YYYY-MM-DD, defaults to today UTC)'
+        required: false
 
 jobs:
   seed:
-    name: Generate today's puzzle
+    name: Generate today's puzzles
     runs-on: ubuntu-latest
     steps:
-      - name: POST /generate to daily worker
-        run: |
-          curl -X POST "https://whatthesub-daily.sean-feeser.workers.dev/generate" \
-            --fail --silent --show-error --max-time 30
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Generate WhatTheSub puzzle
+        run: node scripts/generate-puzzle.mjs ${{ github.event.inputs.date }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+      - name: Generate Find the Thread puzzle
+        run: node scripts/generate-thread.mjs ${{ github.event.inputs.date }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
