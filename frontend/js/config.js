@@ -4,5 +4,5 @@
 //
 // For local dev: run `npm run dev:api` (starts on :8787) and set to 'http://localhost:8787'
 const CONFIG = {
-  API_BASE: '',
+  API_BASE: 'https://whatthesub-api.sean-feeser.workers.dev',
 };

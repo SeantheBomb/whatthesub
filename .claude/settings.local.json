@@ -12,7 +12,14 @@
       "Bash(gh api *)",
       "Bash(git init *)",
       "Bash(git add *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(gh repo *)",
+      "Bash(git branch *)",
+      "Bash(git push *)",
+      "Bash(npm install *)",
+      "Bash(curl -s \"https://api.cloudflare.com/client/v4/accounts/82fcff5fb1a0de92c409f86edd495985/workers/scripts\" -H \"Authorization: Bearer $\\(npx wrangler whoami)",
+      "mcp__38544f94-98a4-42c0-8d93-ad6405984bc2__workers_get_worker",
+      "mcp__38544f94-98a4-42c0-8d93-ad6405984bc2__workers_get_worker_code"
     ]
   }
 }
