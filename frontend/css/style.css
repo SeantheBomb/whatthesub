@@ -996,7 +996,44 @@ main {
 .ftt-card.wrong {
   border-color: var(--error);
   background: #fdf0f0;
-  animation: ftt-wrong-shake 0.48s ease;
+  animation: ftt-wrong-shake 0.5s ease;
+}
+
+/* One-away: amber shake instead of red */
+.ftt-card.one-away {
+  border-color: var(--amber);
+  background: #fdf6e3;
+  animation: ftt-wrong-shake 0.5s ease;
+}
+
+/* Feedback banner */
+@keyframes ftt-feedback-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.ftt-feedback {
+  text-align: center;
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  font-family: 'Lora', serif;
+  font-size: 0.88rem;
+  font-weight: 600;
+  margin-top: 0.6rem;
+  animation: ftt-feedback-in 0.2s ease;
+  letter-spacing: 0.02em;
+}
+
+.ftt-feedback-wrong {
+  background: #fdf0f0;
+  color: var(--error);
+  border: 1px solid var(--error);
+}
+
+.ftt-feedback-one-away {
+  background: #fdf6e3;
+  color: var(--amber);
+  border: 1px solid var(--amber);
 }
 
 .ftt-card-body {

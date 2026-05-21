@@ -296,7 +296,13 @@ export default {
       if (indices.some(i => i == null)) return json({ error: 'Unknown comment ID' }, 400);
 
       const allSame = indices.every(i => i === indices[0]);
-      if (!allSame) return json({ correct: false });
+      if (!allSame) {
+        // Check if exactly 3 of the 4 share the same post_index ("one away")
+        const counts = {};
+        for (const idx of indices) counts[idx] = (counts[idx] ?? 0) + 1;
+        const oneAway = Object.values(counts).some(c => c === 3);
+        return json({ correct: false, one_away: oneAway });
+      }
 
       const post_index = indices[0];
       const round = puzzle.rounds[post_index];

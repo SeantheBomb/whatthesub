@@ -291,7 +291,7 @@ async function onSubmitGroup() {
   } else {
     gameState.strikes += 1;
     ThreadStorage.saveGame(date, gameState);
-    await animateWrongGroup(group);
+    await animateWrongGroup(group, result.one_away === true);
     syncStrikes();
 
     if (gameState.strikes >= gameState.max_strikes) {
@@ -316,20 +316,41 @@ function animateCorrectGroup(ids, result) {
   });
 }
 
-function animateWrongGroup(ids) {
+function animateWrongGroup(ids, oneAway = false) {
   return new Promise(resolve => {
+    const cls = oneAway ? 'one-away' : 'wrong';
     ids.forEach(id => {
       const card = document.querySelector(`.ftt-card[data-id="${CSS.escape(id)}"]`);
-      if (card) card.classList.add('wrong');
+      if (card) card.classList.add(cls);
     });
+
+    // Show feedback banner
+    showGuessFeedback(oneAway ? 'One away…' : 'Not quite', oneAway ? 'one-away' : 'wrong');
+
     setTimeout(() => {
       ids.forEach(id => {
         const card = document.querySelector(`.ftt-card[data-id="${CSS.escape(id)}"]`);
-        if (card) card.classList.remove('wrong');
+        if (card) card.classList.remove(cls);
       });
       resolve();
-    }, 520);
+    }, 600);
   });
+}
+
+function showGuessFeedback(message, type) {
+  const existing = document.getElementById('ftt-feedback');
+  if (existing) existing.remove();
+
+  const el = document.createElement('div');
+  el.id = 'ftt-feedback';
+  el.className = `ftt-feedback ftt-feedback-${type}`;
+  el.textContent = message;
+
+  const controls = document.querySelector('.ftt-controls');
+  if (controls) controls.after(el);
+
+  // Auto-remove after 1.8s
+  setTimeout(() => el.remove(), 1800);
 }
 
 // ── Game over ─────────────────────────────────────────────────────────────────
