@@ -1,0 +1,17 @@
+{
+  "name": "whatthesub",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "deploy:api": "npx wrangler deploy --config workers/api/wrangler.toml",
+    "deploy:daily": "npx wrangler deploy --config workers/daily/wrangler.toml",
+    "deploy:pages": "npx wrangler pages deploy frontend --project-name whatthesub",
+    "deploy": "npm run deploy:api && npm run deploy:daily && npm run deploy:pages",
+    "dev:api": "npx wrangler dev --config workers/api/wrangler.toml",
+    "dev:daily": "npx wrangler dev --config workers/daily/wrangler.toml",
+    "generate": "curl -X POST http://localhost:8787/generate"
+  },
+  "devDependencies": {
+    "wrangler": "^4.54.0"
+  }
+}

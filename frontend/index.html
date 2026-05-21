@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WhatTheSub — Daily Reddit Puzzle</title>
+  <meta name="description" content="Guess which subreddit each post came from. One new puzzle every day.">
+  <meta property="og:title" content="WhatTheSub">
+  <meta property="og:description" content="A daily Reddit guessing game. Can you spot the subreddit?">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400&family=Lora:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+  <header class="masthead">
+    <div class="masthead-top">
+      <div>
+        <h1 class="masthead-title">WhatTheSub</h1>
+        <p class="masthead-tagline">A daily Reddit puzzle</p>
+      </div>
+      <div>
+        <p class="masthead-date" id="today-date"></p>
+        <div class="strike-counter">
+          <span class="strike-dot" id="strike-0" title="Strike 1"></span>
+          <span class="strike-dot" id="strike-1" title="Strike 2"></span>
+          <span class="strike-dot" id="strike-2" title="Strike 3"></span>
+        </div>
+      </div>
+    </div>
+    <nav class="masthead-nav">
+      <a href="/" class="active">Today</a>
+      <a href="/history.html">History</a>
+      <a href="/leaderboard.html">Leaderboard</a>
+    </nav>
+  </header>
+
+  <main>
+    <div id="game-container">
+      <p class="loading">Loading today's puzzle…</p>
+    </div>
+  </main>
+
+  <!-- End-game modal -->
+  <div class="modal-overlay" id="end-modal" role="dialog" aria-modal="true">
+    <div class="modal">
+      <h2 class="modal-title" id="end-title"></h2>
+      <p class="modal-subtitle" id="end-message"></p>
+
+      <div class="share-box" id="share-card" aria-label="Shareable result"></div>
+      <button class="copy-btn" id="copy-btn">Copy to Clipboard</button>
+
+      <div class="answers-reveal">
+        <h3>Today's Answers</h3>
+        <div id="answers-reveal"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/config.js"></script>
+  <script src="/js/storage.js"></script>
+  <script src="/js/api.js"></script>
+  <script src="/js/game.js"></script>
+</body>
+</html>

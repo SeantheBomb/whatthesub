@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Leaderboard — WhatTheSub</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400&family=Lora:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+  <header class="masthead">
+    <div class="masthead-top">
+      <div>
+        <h1 class="masthead-title">WhatTheSub</h1>
+        <p class="masthead-tagline">A daily Reddit puzzle</p>
+      </div>
+    </div>
+    <nav class="masthead-nav">
+      <a href="/">Today</a>
+      <a href="/history.html">History</a>
+      <a href="/leaderboard.html" class="active">Leaderboard</a>
+    </nav>
+  </header>
+
+  <main>
+    <h2 class="page-header">Leaderboard</h2>
+    <p class="page-subheader" id="lb-subtitle">Today's top players</p>
+
+    <table class="leaderboard-table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Player</th>
+          <th>Rounds</th>
+          <th>Strikes</th>
+          <th>Time</th>
+        </tr>
+      </thead>
+      <tbody id="leaderboard-body">
+        <tr>
+          <td colspan="5" class="leaderboard-empty">
+            Loading…
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </main>
+
+  <script src="/js/config.js"></script>
+  <script src="/js/api.js"></script>
+  <script>
+    API.fetchLeaderboard('daily').then(data => {
+      const tbody = document.getElementById('leaderboard-body');
+      if (!data.entries || data.entries.length === 0) {
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="5" class="leaderboard-empty">
+              No entries yet for today.<br>
+              <small>Player accounts and the full leaderboard are coming in a future update.</small>
+            </td>
+          </tr>`;
+      } else {
+        tbody.innerHTML = data.entries.map((e, i) => `
+          <tr>
+            <td>${i + 1}</td>
+            <td>${e.username}</td>
+            <td>${e.rounds_won}/6</td>
+            <td>${e.strikes}</td>
+            <td>${e.time ?? '—'}</td>
+          </tr>`).join('');
+      }
+    }).catch(() => {
+      document.getElementById('leaderboard-body').innerHTML = `
+        <tr><td colspan="5" class="leaderboard-empty">Could not load leaderboard.</td></tr>`;
+    });
+  </script>
+</body>
+</html>

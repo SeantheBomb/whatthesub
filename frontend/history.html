@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>History — WhatTheSub</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400&family=Lora:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+  <header class="masthead">
+    <div class="masthead-top">
+      <div>
+        <h1 class="masthead-title">WhatTheSub</h1>
+        <p class="masthead-tagline">A daily Reddit puzzle</p>
+      </div>
+    </div>
+    <nav class="masthead-nav">
+      <a href="/">Today</a>
+      <a href="/history.html" class="active">History</a>
+      <a href="/leaderboard.html">Leaderboard</a>
+    </nav>
+  </header>
+
+  <main>
+    <h2 class="page-header">Your History</h2>
+    <p class="page-subheader">Saved locally in this browser · accounts coming soon</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-value" id="stat-played">—</span>
+        <span class="stat-label">Played</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-value" id="stat-winrate">—</span>
+        <span class="stat-label">Win Rate</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-value" id="stat-streak">—</span>
+        <span class="stat-label">Streak</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-value" id="stat-max">—</span>
+        <span class="stat-label">Best Streak</span>
+      </div>
+    </div>
+
+    <hr class="section-divider">
+
+    <div class="history-list" id="history-list">
+      <p style="color:var(--muted); font-style:italic; text-align:center; padding: 1.5rem 0;">
+        No completed games yet — come back after your first puzzle!
+      </p>
+    </div>
+  </main>
+
+  <script src="/js/config.js"></script>
+  <script src="/js/storage.js"></script>
+  <script>
+    const stats = Storage.getStats();
+    document.getElementById('stat-played').textContent  = stats.games_played || '0';
+    document.getElementById('stat-winrate').textContent = stats.games_played
+      ? Math.round((stats.games_won / stats.games_played) * 100) + '%' : '—';
+    document.getElementById('stat-streak').textContent  = stats.current_streak || '0';
+    document.getElementById('stat-max').textContent     = stats.max_streak || '0';
+
+    const history = Storage.getGameHistory();
+    if (history.length) {
+      document.getElementById('history-list').innerHTML = history.map(game => {
+        const dateStr = new Date(game.date + 'T12:00:00Z').toLocaleDateString('en-US', {
+          weekday: 'short', month: 'short', day: 'numeric', year: 'numeric',
+        });
+        const roundsWon = game.rounds.filter(r => r.status === 'correct').length;
+        return `
+          <div class="history-item">
+            <span class="h-date">${dateStr}</span>
+            <span class="h-result ${game.status}">${game.status.toUpperCase()}</span>
+            <span class="h-strikes">${roundsWon}/6 rounds &middot; ${game.strikes} strike${game.strikes !== 1 ? 's' : ''}</span>
+          </div>`;
+      }).join('');
+    }
+  </script>
+</body>
+</html>

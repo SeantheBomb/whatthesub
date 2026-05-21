@@ -1,0 +1,12 @@
+name = "whatthesub-daily"
+main = "src/index.js"
+compatibility_date = "2024-09-23"
+account_id = "82fcff5fb1a0de92c409f86edd495985"
+workers_dev = true
+
+[triggers]
+crons = ["5 0 * * *"]
+
+[[kv_namespaces]]
+binding = "PUZZLES"
+id = "010130a100d74b3f9e43f6147ed22444"

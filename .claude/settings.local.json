@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__38544f94-98a4-42c0-8d93-ad6405984bc2__accounts_list",
+      "mcp__38544f94-98a4-42c0-8d93-ad6405984bc2__workers_list",
+      "mcp__38544f94-98a4-42c0-8d93-ad6405984bc2__d1_databases_list",
+      "Bash(gh auth *)",
+      "Bash(gh --version)",
+      "Bash(npm --version)",
+      "Bash(npx wrangler *)",
+      "mcp__38544f94-98a4-42c0-8d93-ad6405984bc2__kv_namespace_create",
+      "Bash(gh api *)",
+      "Bash(git init *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
+    ]
+  }
+}
