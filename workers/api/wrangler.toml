@@ -7,3 +7,8 @@ workers_dev = true
 [[kv_namespaces]]
 binding = "PUZZLES"
 id = "010130a100d74b3f9e43f6147ed22444"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "whatthesub-db"
+database_id = "819c4eb8-d1a2-4b61-a31a-e53c80789c9d"

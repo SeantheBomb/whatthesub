@@ -138,6 +138,17 @@ function extractKeywords(title) {
   return [...new Set(words)];
 }
 
+// ── Jaccard similarity ────────────────────────────────────────────────────────
+// Operates on Sets of keyword strings.
+// Returns 0 when both sets are empty; 1 when identical.
+function jaccard(setA, setB) {
+  if (setA.size === 0 && setB.size === 0) return 0;
+  let intersection = 0;
+  for (const w of setA) { if (setB.has(w)) intersection++; }
+  const union = setA.size + setB.size - intersection;
+  return union === 0 ? 0 : intersection / union;
+}
+
 function isEligible(post) {
   if (!post) return false;
   const sub = post.subreddit.toLowerCase();
@@ -213,51 +224,101 @@ async function searchForPost(keyword, usedSubs, rng) {
   }
 }
 
-// ── Unified keyword attempt ───────────────────────────────────────────────────
-async function tryUnifiedChain(keyword, seedRound, seed) {
-  const url = `${redditBase()}/search.json?q=${encodeURIComponent(keyword)}&sort=relevance&t=week&limit=50&raw_json=1`;
+// ── Similarity-based unified selection ───────────────────────────────────────
+// Fetches up to 100 posts matching `keyword`, then greedily picks the 5 that
+// are most lexically confusable with each other (and with the seed post) using
+// Jaccard similarity on keyword sets.
+//
+// Selection thresholds:
+//   sim < MIN_SIM  → unrelated post, skip (would make the puzzle too easy)
+//   sim > REPOST   → near-repost of the seed, skip (would make it trivially hard)
+//   Otherwise      → greedy-pick to maximise average pairwise similarity
+//
+// Using t=month (instead of t=week) to widen the candidate pool.
+async function tryUnifiedWithSimilarity(keyword, seedRound, seed) {
+  const url = `${redditBase()}/search.json?q=${encodeURIComponent(keyword)}&sort=relevance&t=month&limit=100&raw_json=1`;
   try {
     const res = await fetch(url, { headers: redditHeaders() });
     if (!res.ok) return null;
     const data = await res.json();
     const posts = (data?.data?.children ?? []).map(p => p.data);
 
-    // Deduplicate by subreddit, filter to eligible posts in new subs
-    const usedSubs = new Set([seedRound.subreddit.toLowerCase()]);
-    const seen = new Set([seedRound.subreddit.toLowerCase()]);
-    const candidates = [];
+    // One eligible post per subreddit (exclude seed sub)
+    const seedSub = seedRound.subreddit.toLowerCase();
+    const bySubreddit = new Map();
     for (const p of posts) {
       const sub = p.subreddit.toLowerCase();
-      if (seen.has(sub) || !isEligible(p)) continue;
-      seen.add(sub);
-      candidates.push(p);
+      if (sub === seedSub || !isEligible(p)) continue;
+      if (!bySubreddit.has(sub)) bySubreddit.set(sub, p);
+    }
+    const candidates = [...bySubreddit.values()];
+
+    if (candidates.length < 5) {
+      console.error(`[sim] "${keyword}": only ${candidates.length} unique subreddits — need 5+`);
+      return null;
     }
 
-    if (candidates.length < 5) return null;
+    // Precompute keyword sets for seed + all candidates
+    const seedKws = new Set(extractKeywords(seedRound.post_title));
 
-    // Seeded shuffle so different dates pick different orderings
-    const shuffled = seededShuffle(candidates, seed + 991);
+    const REPOST_THRESHOLD = 0.65; // above this → near-repost of seed
+    const MIN_SIM          = 0.05; // below this → completely unrelated
+
+    const pool = candidates
+      .map(p => ({ post: p, kws: new Set(extractKeywords(cleanTitle(p.title))) }))
+      .filter(({ kws }) => {
+        const sim = jaccard(seedKws, kws);
+        return sim >= MIN_SIM && sim <= REPOST_THRESHOLD;
+      });
+
+    if (pool.length < 5) {
+      console.error(`[sim] "${keyword}": only ${pool.length} candidates after similarity filter`);
+      return null;
+    }
+
+    // ── Greedy maximisation of average pairwise Jaccard ───────────────────────
+    // At each step: pick the available candidate whose keyword set has the
+    // highest average Jaccard to all already-selected posts (seed included).
+    // This approximates the maximum-weight dense subgraph without brute-force.
+    const selected = [{ post: null, kws: seedKws }]; // seed is the anchor
+    const available = [...pool];
+
+    while (selected.length < 6 && available.length > 0) {
+      let bestScore = -1;
+      let bestIdx   = 0;
+
+      for (let i = 0; i < available.length; i++) {
+        const { kws } = available[i];
+        const avgSim = selected.reduce((s, sel) => s + jaccard(kws, sel.kws), 0) / selected.length;
+        if (avgSim > bestScore) { bestScore = avgSim; bestIdx = i; }
+      }
+
+      const chosen = available.splice(bestIdx, 1)[0];
+      selected.push(chosen);
+      console.error(
+        `[sim]   +r/${chosen.post.subreddit} avgSim=${bestScore.toFixed(3)}` +
+        ` — "${chosen.post.title.slice(0, 55)}"`
+      );
+    }
+
+    if (selected.length < 6) return null;
+
+    // Build round objects (skip the seed anchor at index 0)
     const rounds = [seedRound];
-
-    for (const post of shuffled) {
-      if (rounds.length >= 6) break;
-      const sub = post.subreddit.toLowerCase();
-      if (usedSubs.has(sub)) continue;
-      const display = cleanTitle(post.title);
+    for (const { post } of selected.slice(1)) {
       rounds.push({
-        subreddit: post.subreddit,
-        post_title: display,
-        post_url: `https://reddit.com${post.permalink}`,
-        post_score: post.score,
-        post_images: extractImages(post),
+        subreddit:       post.subreddit,
+        post_title:      cleanTitle(post.title),
+        post_url:        `https://reddit.com${post.permalink}`,
+        post_score:      post.score,
+        post_images:     extractImages(post),
         linking_keyword: keyword,
       });
-      usedSubs.add(sub);
     }
 
-    return rounds.length >= 6 ? rounds : null;
+    return rounds;
   } catch (err) {
-    console.error(`tryUnifiedChain(${keyword}):`, err.message);
+    console.error(`tryUnifiedWithSimilarity(${keyword}):`, err.message);
     return null;
   }
 }
@@ -299,22 +360,22 @@ async function generatePuzzle(date) {
   let unifiedResult = null;
 
   for (const keyword of keywordsToTry) {
-    console.error(`[unified] trying "${keyword}"`);
+    console.error(`[sim] trying unified keyword "${keyword}"`);
     await sleep(300);
-    const attempt = await tryUnifiedChain(keyword, rounds[0], seed);
+    const attempt = await tryUnifiedWithSimilarity(keyword, rounds[0], seed);
     if (attempt) {
-      console.error(`[unified] success with "${keyword}"`);
+      console.error(`[sim] success with "${keyword}"`);
       unifiedResult = { rounds: attempt, unified_keyword: keyword };
       break;
     }
-    console.error(`[unified] failed with "${keyword}"`);
+    console.error(`[sim] failed with "${keyword}"`);
   }
 
   if (unifiedResult) {
     const shuffled_options = seededShuffle(unifiedResult.rounds.map(r => r.subreddit), seed + 7919);
     return {
       date,
-      puzzle_type: 'unified',
+      puzzle_type: 'similarity',   // unified keyword + Jaccard-greedy selection
       unified_keyword: unifiedResult.unified_keyword,
       rounds: unifiedResult.rounds,
       shuffled_options,
