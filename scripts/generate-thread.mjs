@@ -38,6 +38,14 @@ const BLOCKLIST = new Set([
   'announcements', 'changelog', 'blog',
 ]);
 
+// Subreddits whose comments aren't suitable for Find the Thread
+// (writing submissions, interview transcripts, very long replies, etc.)
+const THREAD_COMMENT_BLOCKLIST = new Set([
+  'writingprompts', 'WritingPrompts', 'nosleep', 'IAmA', 'iama',
+  'changemyview', 'CMV', 'explainlikeimfive', 'eli5',
+  'dataisbeautiful', 'personalfinance', 'legaladvice',
+]);
+
 const STOP_WORDS = new Set([
   'a','an','the','this','that','these','those','some','any','all','both',
   'each','few','more','most','other','such','no','own','same',
@@ -132,6 +140,8 @@ function isEligible(post) {
   return (
     !post.over_18 && !post.stickied && !post.spoiler &&
     !BLOCKLIST.has(sub) &&
+    !THREAD_COMMENT_BLOCKLIST.has(sub) &&
+    !THREAD_COMMENT_BLOCKLIST.has(post.subreddit) &&
     post.score >= 50 &&
     post.title.length >= 20 &&
     post.title.length <= 300 &&
@@ -148,9 +158,13 @@ function isEligibleComment(c) {
   if (c.stickied) return false;
   if (c.author === 'AutoModerator' || c.author === '[deleted]') return false;
   if (!(c.parent_id ?? '').startsWith('t3_')) return false; // top-level only
-  // Reject if stripping URLs leaves less than 20 chars of real text
-  const bodyWithoutUrls = body.replace(/https?:\/\/\S+/g, '').replace(/\s+/g, ' ').trim();
-  if (bodyWithoutUrls.length < 20) return false;
+  // Reject if stripping URLs, GIF embeds, and markdown links leaves < 20 chars of real text
+  const bodyWithoutMedia = body
+    .replace(/!\[gif\]\([^)]+\)/g, '')       // Reddit inline GIFs
+    .replace(/!\[[^\]]*\]\([^)]+\)/g, '')    // any markdown image
+    .replace(/https?:\/\/\S+/g, '')          // bare URLs
+    .replace(/\s+/g, ' ').trim();
+  if (bodyWithoutMedia.length < 20) return false;
   // Skip quote-heavy replies
   const quoteLines = body.split('\n').filter(l => l.startsWith('&gt;') || l.startsWith('>'));
   if (quoteLines.length > 2) return false;
@@ -332,21 +346,55 @@ async function generateThread(date) {
 
   if (rounds.length < 4) throw new Error(`Only generated ${rounds.length}/4 rounds`);
 
-  // Step 3: Fetch 4 top comments for each post
+  // Step 3: Fetch 4 top comments for each post (retry with pool fallback if a post is dry)
   console.error('[comments] fetching top comments for each post…');
+  const verifiedRounds = [];
   for (let i = 0; i < rounds.length; i++) {
     const r = rounds[i];
     await sleep(500);
     const comments = await fetchTopComments(r.subreddit, r.post_id, seed + i * 9973);
-    if (comments.length < 4) {
-      throw new Error(`r/${r.subreddit} post "${r.post_id}" only has ${comments.length} eligible comments`);
+    if (comments.length >= 4) {
+      rounds[i].comments = comments.slice(0, 4);
+      console.error(`[comments] r/${r.subreddit}: ${rounds[i].comments.length} comments`);
+      verifiedRounds.push(rounds[i]);
+    } else {
+      console.error(`[comments] r/${r.subreddit} only has ${comments.length} eligible comments — trying another post from pool`);
+      // Try to find a replacement post from the pool that hasn't been used
+      const usedSubsNow = new Set(rounds.map(rr => rr.subreddit.toLowerCase()));
+      let replaced = false;
+      for (const sub of shuffledPool) {
+        if (usedSubsNow.has(sub.toLowerCase())) continue;
+        await sleep(400);
+        const post = await fetchHotPost(sub);
+        if (!post) continue;
+        await sleep(500);
+        const altComments = await fetchTopComments(sub, post.id, seed + i * 9973 + 1);
+        if (altComments.length < 4) continue;
+        const display = cleanTitle(post.title);
+        const replacement = {
+          subreddit: sub,
+          post_id: post.id,
+          post_title: display,
+          post_url: `https://reddit.com${post.permalink}`,
+          post_images: extractImages(post),
+          comments: altComments.slice(0, 4),
+        };
+        verifiedRounds.push(replacement);
+        usedSubsNow.add(sub.toLowerCase());
+        console.error(`[comments] replaced with r/${sub}`);
+        replaced = true;
+        break;
+      }
+      if (!replaced) {
+        throw new Error(`Could not find 4 posts with enough eligible comments after retries`);
+      }
     }
-    rounds[i].comments = comments.slice(0, 4);
-    console.error(`[comments] r/${r.subreddit}: ${rounds[i].comments.length} comments fetched`);
   }
+  const rounds4 = verifiedRounds.slice(0, 4);
+  if (rounds4.length < 4) throw new Error(`Only ${rounds4.length}/4 rounds with enough comments`);
 
   // Step 4: Build shuffled_comments array (strips post_index for client; server retains it in KV)
-  const allComments = rounds.flatMap((r, post_index) =>
+  const allComments = rounds4.flatMap((r, post_index) =>
     r.comments.map(c => ({ ...c, post_index }))
   );
   const shuffled_comments = seededShuffle(allComments, seed + 7777);
@@ -355,13 +403,13 @@ async function generateThread(date) {
 
   return {
     date,
-    rounds: rounds.map(r => ({
+    rounds: rounds4.map(r => ({
       subreddit: r.subreddit,
       post_id: r.post_id,
       post_title: r.post_title,
       post_url: r.post_url,
       post_images: r.post_images,
-      comments: r.comments, // includes all 4 comments with their ids
+      comments: r.comments,
     })),
     shuffled_comments,
     generated_at: new Date().toISOString(),

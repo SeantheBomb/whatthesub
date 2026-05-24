@@ -136,9 +136,10 @@ function renderBoard(comments) {
 }
 
 function cleanCommentBody(body) {
-  // Strip bare URLs (they're unreadable as card text)
   return body
-    .replace(/https?:\/\/\S+/g, '')
+    .replace(/!\[gif\]\([^)]+\)/g, '')     // Reddit inline GIFs
+    .replace(/!\[[^\]]*\]\([^)]+\)/g, '')  // any markdown image
+    .replace(/https?:\/\/\S+/g, '')        // bare URLs
     .replace(/\s+/g, ' ')
     .trim();
 }
