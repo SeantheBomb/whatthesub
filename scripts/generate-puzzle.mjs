@@ -243,13 +243,21 @@ async function tryUnifiedWithSimilarity(keyword, seedRound, seed) {
     const data = await res.json();
     const posts = (data?.data?.children ?? []).map(p => p.data);
 
-    // One eligible post per subreddit (exclude seed sub)
+    // One eligible post per subreddit (exclude seed sub).
+    // Also deduplicate by normalised title to filter out cross-posts —
+    // two rounds with the same text would immediately reveal themselves.
     const seedSub = seedRound.subreddit.toLowerCase();
     const bySubreddit = new Map();
+    const seenTitles  = new Set([cleanTitle(seedRound.post_title).toLowerCase()]);
     for (const p of posts) {
-      const sub = p.subreddit.toLowerCase();
+      const sub          = p.subreddit.toLowerCase();
+      const titleNorm    = cleanTitle(p.title).toLowerCase();
       if (sub === seedSub || !isEligible(p)) continue;
-      if (!bySubreddit.has(sub)) bySubreddit.set(sub, p);
+      if (seenTitles.has(titleNorm)) continue;   // cross-post — skip
+      if (!bySubreddit.has(sub)) {
+        bySubreddit.set(sub, p);
+        seenTitles.add(titleNorm);
+      }
     }
     const candidates = [...bySubreddit.values()];
 
