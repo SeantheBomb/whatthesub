@@ -7,6 +7,10 @@
 //
 // Required env:
 //   CLOUDFLARE_API_TOKEN  — CF token with Workers KV Storage Write permission
+//   REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_USERNAME, REDDIT_PASSWORD
+//     — Reddit Script app credentials (see scripts/reddit.mjs for setup instructions)
+
+import { initReddit, redditHeaders, redditBase } from './reddit.mjs';
 
 const ACCOUNT_ID    = '82fcff5fb1a0de92c409f86edd495985';
 const KV_NAMESPACE  = '010130a100d74b3f9e43f6147ed22444';
@@ -178,15 +182,12 @@ function extractImages(post) {
 }
 
 // ── Reddit fetch ──────────────────────────────────────────────────────────────
-const REDDIT_HEADERS = {
-  'User-Agent': 'WhatTheSub/1.0 daily-puzzle-game (github.com/SeantheBomb/whatthesub)',
-};
 
 async function fetchHotPost(subreddit) {
-  const url = `https://www.reddit.com/r/${subreddit}/hot.json?limit=15&raw_json=1`;
+  const url = `${redditBase()}/r/${subreddit}/hot.json?limit=15&raw_json=1`;
   try {
-    const res = await fetch(url, { headers: REDDIT_HEADERS });
-    if (!res.ok) return null;
+    const res = await fetch(url, { headers: redditHeaders() });
+    if (!res.ok) { console.error(`fetchHotPost(${subreddit}): HTTP ${res.status}`); return null; }
     const data = await res.json();
     const posts = (data?.data?.children ?? []).map(p => p.data);
     return posts.find(isEligible) ?? null;
@@ -197,9 +198,9 @@ async function fetchHotPost(subreddit) {
 }
 
 async function searchForPost(keyword, usedSubs, rng) {
-  const url = `https://www.reddit.com/search.json?q=${encodeURIComponent(keyword)}&sort=relevance&t=week&limit=25&raw_json=1`;
+  const url = `${redditBase()}/search.json?q=${encodeURIComponent(keyword)}&sort=relevance&t=week&limit=25&raw_json=1`;
   try {
-    const res = await fetch(url, { headers: REDDIT_HEADERS });
+    const res = await fetch(url, { headers: redditHeaders() });
     if (!res.ok) return null;
     const data = await res.json();
     const posts = (data?.data?.children ?? []).map(p => p.data);
@@ -214,9 +215,9 @@ async function searchForPost(keyword, usedSubs, rng) {
 
 // ── Unified keyword attempt ───────────────────────────────────────────────────
 async function tryUnifiedChain(keyword, seedRound, seed) {
-  const url = `https://www.reddit.com/search.json?q=${encodeURIComponent(keyword)}&sort=relevance&t=week&limit=50&raw_json=1`;
+  const url = `${redditBase()}/search.json?q=${encodeURIComponent(keyword)}&sort=relevance&t=week&limit=50&raw_json=1`;
   try {
-    const res = await fetch(url, { headers: REDDIT_HEADERS });
+    const res = await fetch(url, { headers: redditHeaders() });
     if (!res.ok) return null;
     const data = await res.json();
     const posts = (data?.data?.children ?? []).map(p => p.data);
@@ -405,6 +406,7 @@ const date = args.find(a => !a.startsWith('--')) ?? new Date().toISOString().sli
 if (!jsonOnly) console.error(`[WhatTheSub] Generating puzzle for ${date}`);
 
 try {
+  await initReddit();
   const puzzle = await generatePuzzle(date);
   if (jsonOnly) {
     // Output JSON to stdout for piping to wrangler kv put
