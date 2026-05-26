@@ -38,6 +38,40 @@ const BLOCKLIST = new Set([
   'announcements', 'changelog', 'blog',
 ]);
 
+// Per-subreddit terms that directly reveal the subreddit in a post title.
+// Keys are lowercase subreddit names. Values are arrays of strings that,
+// if found in a post title (case-insensitive, whole-word match), cause the
+// post to be rejected entirely rather than just stripped.
+// Add to this list whenever playtesters spot a new giveaway.
+const SUBREDDIT_GIVEAWAYS = {
+  // Acronym/abbreviation giveaways
+  todayilearned:      ['til'],
+  tifu:               ['tifu'],
+  AmItheAsshole:      ['aita', 'wibta', 'nta', 'yta', 'esh', 'nah'],
+  explainlikeimfive:  ['eli5'],
+  LifeProTips:        ['lpt'],
+  changemyview:       ['cmv'],
+  // Era/topic giveaways
+  '90s':              ['y2k', '1990s', "90's", '90s'],
+  '80s':              ['1980s', "80's", '80s'],
+  '70s':              ['1970s', "70's", '70s'],
+  vinyl:              ['vinyl', 'record', 'turntable', 'rpm'],
+  cars:               ['mph', 'horsepower', 'torque'],
+  shitposting:        ['shitpost'],
+  mildlyinfuriating:  ['mildly infuriating'],
+  mildlyinteresting:  ['mildly interesting'],
+  nottheonion:        ['onion'],
+  facepalm:           ['facepalm'],
+  Showerthoughts:     ['shower thought'],
+  pettyrevenge:       ['petty revenge'],
+  ProRevenge:         ['pro revenge'],
+  NuclearRevenge:     ['nuclear revenge'],
+  confession:         ['confession'],
+  unpopularopinion:   ['unpopular opinion'],
+  legaladvice:        ['legal advice', 'lawyer', 'attorney', 'lawsuit'],
+  relationship_advice:['relationship advice'],
+};
+
 const STOP_WORDS = new Set([
   'a','an','the','this','that','these','those','some','any','all','both',
   'each','few','more','most','other','such','no','own','same',
@@ -122,6 +156,10 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function cleanTitle(title) {
   let t = title.trim();
+  // Try each prefix pattern. Use replaceAll-safe single replace on the string.
+  // Some Reddit titles use non-breaking spaces or other Unicode whitespace after
+  // the acronym — normalise whitespace first so patterns match reliably.
+  t = t.replace(/\s+/g, ' ');
   for (const pat of TITLE_PREFIXES) {
     const stripped = t.replace(pat, '').trim();
     if (stripped.length >= 15) { t = stripped; break; }
@@ -151,19 +189,31 @@ function jaccard(setA, setB) {
 
 function isEligible(post) {
   if (!post) return false;
-  const sub = post.subreddit.toLowerCase();
+  const sub   = post.subreddit.toLowerCase();
   const title = (post.title ?? '').toLowerCase();
-  return (
-    !post.over_18 &&
-    !post.stickied &&
-    !post.spoiler &&
-    !BLOCKLIST.has(sub) &&
-    post.score >= 50 &&
-    post.title.length >= 20 &&
-    post.title.length <= 300 &&
-    !title.includes(`r/${sub}`) &&
-    !title.includes(`/r/${sub}`)
-  );
+
+  if (post.over_18 || post.stickied || post.spoiler) return false;
+  if (BLOCKLIST.has(sub)) return false;
+  if (post.score < 50) return false;
+  if (post.title.length < 20 || post.title.length > 300) return false;
+
+  // Reject if the post explicitly names its own subreddit
+  if (title.includes(`r/${sub}`) || title.includes(`/r/${sub}`)) return false;
+
+  // Reject if any known giveaway term appears as a whole word/token in the title.
+  // Look up by original-case name AND lowercase, so the dict keys can be written
+  // in either style (e.g. 'AmItheAsshole' or 'amitheasshole').
+  const giveaways = [
+    ...(SUBREDDIT_GIVEAWAYS[post.subreddit] ?? []),
+    ...(SUBREDDIT_GIVEAWAYS[sub]             ?? []),
+  ];
+  for (const term of giveaways) {
+    // Whole-word boundary match, case-insensitive
+    const re = new RegExp(`(?<![a-z0-9])${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![a-z0-9])`, 'i');
+    if (re.test(title)) return false;
+  }
+
+  return true;
 }
 
 function extractImages(post) {
