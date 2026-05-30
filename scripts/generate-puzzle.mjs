@@ -2,15 +2,16 @@
 // Runs in GitHub Actions (or locally) — no Cloudflare subrequest limits apply here.
 // Generates today's puzzle and writes it directly to KV via the REST API.
 //
+// Uses Reddit's public RSS feeds (no API key or OAuth required).
+// RSS works from any IP (cloud, residential, CI) unlike the JSON API.
+//
 // Usage:
 //   node scripts/generate-puzzle.mjs [YYYY-MM-DD]
 //
 // Required env:
 //   CLOUDFLARE_API_TOKEN  — CF token with Workers KV Storage Write permission
-//   REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_USERNAME, REDDIT_PASSWORD
-//     — Reddit Script app credentials (see scripts/reddit.mjs for setup instructions)
 
-import { initReddit, redditHeaders, redditBase } from './reddit.mjs';
+const USER_AGENT = 'WhatTheSub/1.0 daily-puzzle-game by /u/SeantheBomb';
 
 const ACCOUNT_ID    = '82fcff5fb1a0de92c409f86edd495985';
 const KV_NAMESPACE  = '010130a100d74b3f9e43f6147ed22444';
@@ -197,6 +198,10 @@ function isEligible(post) {
   if (post.score < 50) return false;
   if (post.title.length < 20 || post.title.length > 300) return false;
 
+  // Require a real post URL (must contain /comments/) and a non-empty subreddit
+  if (!sub) return false;
+  if (!post.permalink?.includes('/comments/')) return false;
+
   // Reject if the post explicitly names its own subreddit
   if (title.includes(`r/${sub}`) || title.includes(`/r/${sub}`)) return false;
 
@@ -217,41 +222,69 @@ function isEligible(post) {
 }
 
 function extractImages(post) {
-  if (post.is_gallery && post.gallery_data?.items && post.media_metadata) {
-    const urls = post.gallery_data.items
-      .filter(item => !item.is_deleted)
-      .map(item => {
-        const meta = post.media_metadata[item.media_id];
-        if (!meta || meta.status !== 'valid' || !['Image', 'AnimatedImage'].includes(meta.e)) return null;
-        const previews = meta.p ?? [];
-        const best = previews[previews.length - 1];
-        const url = best?.u ?? meta.s?.u;
-        return typeof url === 'string' && url.startsWith('https://') ? url : null;
-      })
-      .filter(Boolean);
-    if (urls.length) return urls;
-  }
-
-  if (post.post_hint === 'image' && /\.(jpg|jpeg|png|gif|webp)(\?|$)/i.test(post.url ?? '')) {
-    return [post.url];
-  }
-
-  const src = post.preview?.images?.[0]?.source?.url;
-  if (typeof src === 'string' && src.startsWith('https://')) return [src];
-
+  // RSS-sourced posts carry pre-extracted image URLs
+  if (post._images) return post._images.length ? post._images : null;
   return null;
 }
 
-// ── Reddit fetch ──────────────────────────────────────────────────────────────
+// ── RSS helpers ───────────────────────────────────────────────────────────────
+// Reddit's public RSS/Atom feeds work from any IP with no credentials.
+// JSON API now returns 403 universally for unauthenticated cloud requests.
+
+function decodeHtml(str) {
+  return str
+    .replace(/&amp;/g,  '&')
+    .replace(/&lt;/g,   '<')
+    .replace(/&gt;/g,   '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g,  "'")
+    .replace(/&#32;/g,  ' ')
+    .replace(/&nbsp;/g, ' ');
+}
+
+// Parse Atom entries from a Reddit RSS response into post-shaped objects.
+function parseRSSEntries(xml) {
+  return [...xml.matchAll(/<entry>([\s\S]*?)<\/entry>/g)].map(([, e]) => {
+    const title     = decodeHtml(e.match(/<title>([^<]*)<\/title>/)?.[1] ?? '');
+    const permalink = e.match(/<link[^>]+href="([^"]+)"/)?.[1] ?? '';
+    const subreddit = e.match(/<category term="([^"]+)"/)?.[1] ?? '';
+    const author    = e.match(/<name>\/u\/([^<]+)<\/name>/)?.[1] ?? '';
+    const content   = e.match(/<content[^>]*>([\s\S]*?)<\/content>/)?.[1] ?? '';
+
+    // Extract preview image URLs embedded in the encoded HTML content.
+    // Bump width param from 320 → 1080 for a sharper display image.
+    const images = [...content.matchAll(/&lt;img src=&quot;(https:\/\/[^&"]+)&quot;/g)]
+      .map(m => decodeHtml(m[1]).replace(/width=\d+/, 'width=1080'))
+      .filter(url => url.startsWith('https://'));
+
+    return {
+      title,
+      subreddit,
+      permalink,
+      // Normalise to the shape isEligible() expects:
+      over_18:  false,
+      stickied: /mod|automod/i.test(author),
+      spoiler:  false,
+      score:    100,  // assume hot-listed posts meet the quality bar
+      url:      permalink,
+      _images:  images,
+    };
+  });
+}
+
+async function redditRSS(url) {
+  const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.text();
+}
+
+// ── Reddit fetch (RSS-based) ──────────────────────────────────────────────────
 
 async function fetchHotPost(subreddit) {
-  const url = `${redditBase()}/r/${subreddit}/hot.json?limit=15&raw_json=1`;
   try {
-    const res = await fetch(url, { headers: redditHeaders() });
-    if (!res.ok) { console.error(`fetchHotPost(${subreddit}): HTTP ${res.status}`); return null; }
-    const data = await res.json();
-    const posts = (data?.data?.children ?? []).map(p => p.data);
-    return posts.find(isEligible) ?? null;
+    const xml   = await redditRSS(`https://www.reddit.com/r/${subreddit}/hot.rss`);
+    const posts = parseRSSEntries(xml);
+    return posts.find(p => p.subreddit && isEligible(p)) ?? null;
   } catch (err) {
     console.error(`fetchHotPost(${subreddit}):`, err.message);
     return null;
@@ -259,13 +292,10 @@ async function fetchHotPost(subreddit) {
 }
 
 async function searchForPost(keyword, usedSubs, rng) {
-  const url = `${redditBase()}/search.json?q=${encodeURIComponent(keyword)}&sort=relevance&t=week&limit=25&raw_json=1`;
   try {
-    const res = await fetch(url, { headers: redditHeaders() });
-    if (!res.ok) return null;
-    const data = await res.json();
-    const posts = (data?.data?.children ?? []).map(p => p.data);
-    const eligible = posts.filter(p => !usedSubs.has(p.subreddit.toLowerCase()) && isEligible(p));
+    const xml   = await redditRSS(`https://www.reddit.com/search.rss?q=${encodeURIComponent(keyword)}&sort=relevance&t=week`);
+    const posts = parseRSSEntries(xml);
+    const eligible = posts.filter(p => p.subreddit && !usedSubs.has(p.subreddit.toLowerCase()) && isEligible(p));
     if (!eligible.length) return null;
     return eligible[Math.floor(rng() * Math.min(eligible.length, 5))];
   } catch (err) {
@@ -286,12 +316,9 @@ async function searchForPost(keyword, usedSubs, rng) {
 //
 // Using t=month (instead of t=week) to widen the candidate pool.
 async function tryUnifiedWithSimilarity(keyword, seedRound, seed) {
-  const url = `${redditBase()}/search.json?q=${encodeURIComponent(keyword)}&sort=relevance&t=month&limit=100&raw_json=1`;
   try {
-    const res = await fetch(url, { headers: redditHeaders() });
-    if (!res.ok) return null;
-    const data = await res.json();
-    const posts = (data?.data?.children ?? []).map(p => p.data);
+    const xml   = await redditRSS(`https://www.reddit.com/search.rss?q=${encodeURIComponent(keyword)}&sort=relevance&t=month`);
+    const posts = parseRSSEntries(xml);
 
     // One eligible post per subreddit (exclude seed sub).
     // Also deduplicate by normalised title to filter out cross-posts —
@@ -367,7 +394,7 @@ async function tryUnifiedWithSimilarity(keyword, seedRound, seed) {
       rounds.push({
         subreddit:       post.subreddit,
         post_title:      cleanTitle(post.title),
-        post_url:        `https://reddit.com${post.permalink}`,
+        post_url:        post.permalink,
         post_score:      post.score,
         post_images:     extractImages(post),
         linking_keyword: keyword,
@@ -399,7 +426,7 @@ async function generatePuzzle(date) {
     rounds.push({
       subreddit: sub,
       post_title: display,
-      post_url: `https://reddit.com${post.permalink}`,
+      post_url: post.permalink,
       post_score: post.score,
       post_images: extractImages(post),
       linking_keyword: null,
@@ -460,7 +487,7 @@ async function generatePuzzle(date) {
     rounds.push({
       subreddit: post.subreddit,
       post_title: display,
-      post_url: `https://reddit.com${post.permalink}`,
+      post_url: post.permalink,
       post_score: post.score,
       post_images: extractImages(post),
       linking_keyword: keyword,
@@ -483,7 +510,7 @@ async function generatePuzzle(date) {
       rounds.push({
         subreddit: sub,
         post_title: display,
-        post_url: `https://reddit.com${post.permalink}`,
+        post_url: post.permalink,
         post_score: post.score,
         post_images: extractImages(post),
         linking_keyword: null,
@@ -525,7 +552,6 @@ const date = args.find(a => !a.startsWith('--')) ?? new Date().toISOString().sli
 if (!jsonOnly) console.error(`[WhatTheSub] Generating puzzle for ${date}`);
 
 try {
-  await initReddit();
   const puzzle = await generatePuzzle(date);
   if (jsonOnly) {
     // Output JSON to stdout for piping to wrangler kv put
