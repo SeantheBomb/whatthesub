@@ -2,15 +2,15 @@
 // Generates today's "Find the Thread" puzzle.
 // 4 subreddits → 1 hot post each → 4 top comments each = 16 shuffled comments.
 //
+// Uses Reddit's public RSS feeds — no API key or OAuth required.
+//
 // Usage:
 //   node scripts/generate-thread.mjs [YYYY-MM-DD]
 //
 // Required env:
 //   CLOUDFLARE_API_TOKEN  — CF token with Workers KV Storage Write permission
-//   REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_USERNAME, REDDIT_PASSWORD
-//     — Reddit Script app credentials (see scripts/reddit.mjs)
 
-import { initReddit, redditHeaders, redditBase } from './reddit.mjs';
+const USER_AGENT = 'WhatTheSub/1.0 daily-puzzle-game by /u/SeantheBomb';
 
 const ACCOUNT_ID   = '82fcff5fb1a0de92c409f86edd495985';
 const KV_NAMESPACE = '010130a100d74b3f9e43f6147ed22444';
@@ -39,7 +39,6 @@ const BLOCKLIST = new Set([
 ]);
 
 // Subreddits whose comments aren't suitable for Find the Thread
-// (writing submissions, interview transcripts, very long replies, etc.)
 const THREAD_COMMENT_BLOCKLIST = new Set([
   'writingprompts', 'WritingPrompts', 'nosleep', 'IAmA', 'iama',
   'changemyview', 'CMV', 'explainlikeimfive', 'eli5',
@@ -80,7 +79,7 @@ const STOP_WORDS = new Set([
 
 const TITLE_PREFIXES = [
   /^TIFU\s+by\s+/i, /^AITA\s+(for|if|that|when)\s+/i, /^AITA[?:,\s]/i,
-  /^WIBTA\s+(for|if)\s+/i, /^WIBTA[?:,\s]/i, /^TIL\s+(that\s+)?/i,
+  /^WIBTAH?\s+(for|if)\s+/i, /^WIBTAH?[?:,\s]/i, /^TIL\s+(that\s+)?/i,
   /^TIL[:\s,]/i, /^LPT\s*request?[:\s]/i, /^LPT[:\s]/i, /^ELI5[:\s]/i,
   /^CMV[:\s]/i, /^YSK[:\s]/i, /^DAE\s+/i, /^PSA[:\s]/i,
   /^\[OC\]\s*/i, /^\[Update\]\s*/i, /^\[Serious\]\s*/i,
@@ -116,10 +115,10 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function cleanTitle(title) {
-  let t = title.trim();
+  let t = title.trim().replace(/\s+/g, ' ');
   for (const pat of TITLE_PREFIXES) {
     const stripped = t.replace(pat, '').trim();
-    if (stripped.length >= 15) { t = stripped; break; }
+    if (stripped !== t && stripped.length >= 15) { t = stripped; break; }
   }
   return t.charAt(0).toUpperCase() + t.slice(1);
 }
@@ -135,75 +134,98 @@ function extractKeywords(title) {
 
 function isEligible(post) {
   if (!post) return false;
-  const sub = post.subreddit.toLowerCase();
+  const sub   = (post.subreddit ?? '').toLowerCase();
   const title = (post.title ?? '').toLowerCase();
-  return (
-    !post.over_18 && !post.stickied && !post.spoiler &&
-    !BLOCKLIST.has(sub) &&
-    !THREAD_COMMENT_BLOCKLIST.has(sub) &&
-    !THREAD_COMMENT_BLOCKLIST.has(post.subreddit) &&
-    post.score >= 50 &&
-    post.title.length >= 20 &&
-    post.title.length <= 300 &&
-    !title.includes(`r/${sub}`) &&
-    !title.includes(`/r/${sub}`)
-  );
+  if (!sub) return false;
+  if (!post.permalink?.includes('/comments/')) return false;
+  if (post.over_18 || post.stickied || post.spoiler) return false;
+  if (BLOCKLIST.has(sub)) return false;
+  if (THREAD_COMMENT_BLOCKLIST.has(sub) || THREAD_COMMENT_BLOCKLIST.has(post.subreddit)) return false;
+  if ((post.title?.length ?? 0) < 20 || (post.title?.length ?? 0) > 300) return false;
+  if (title.includes(`r/${sub}`) || title.includes(`/r/${sub}`)) return false;
+  return true;
 }
 
-function isEligibleComment(c) {
-  const body = (c.body ?? '').trim();
-  if (body === '[deleted]' || body === '[removed]') return false;
-  if (body.length < 20 || body.length > 500) return false;
-  if (c.score < 2) return false;
-  if (c.stickied) return false;
-  if (c.author === 'AutoModerator' || c.author === '[deleted]') return false;
-  if (!(c.parent_id ?? '').startsWith('t3_')) return false; // top-level only
-  // Reject if stripping URLs, GIF embeds, and markdown links leaves < 20 chars of real text
+function isEligibleComment(body, author) {
+  if (!body || body.length < 20 || body.length > 500) return false;
+  if (!author || author === 'AutoModerator' || author === '[deleted]') return false;
+  // Filter bot announcements
+  if (/i am a bot[,.]|this action was performed automatically/i.test(body)) return false;
   const bodyWithoutMedia = body
-    .replace(/!\[gif\]\([^)]+\)/g, '')       // Reddit inline GIFs
-    .replace(/!\[[^\]]*\]\([^)]+\)/g, '')    // any markdown image
-    .replace(/https?:\/\/\S+/g, '')          // bare URLs
+    .replace(/!\[gif\]\([^)]+\)/g, '')
+    .replace(/!\[[^\]]*\]\([^)]+\)/g, '')
+    .replace(/https?:\/\/\S+/g, '')
     .replace(/\s+/g, ' ').trim();
   if (bodyWithoutMedia.length < 20) return false;
-  // Skip quote-heavy replies
-  const quoteLines = body.split('\n').filter(l => l.startsWith('&gt;') || l.startsWith('>'));
+  const quoteLines = body.split('\n').filter(l => l.startsWith('>'));
   if (quoteLines.length > 2) return false;
   return true;
 }
 
-function extractImages(post) {
-  if (post.is_gallery && post.gallery_data?.items && post.media_metadata) {
-    const urls = post.gallery_data.items
-      .filter(item => !item.is_deleted)
-      .map(item => {
-        const meta = post.media_metadata[item.media_id];
-        if (!meta || meta.status !== 'valid' || !['Image', 'AnimatedImage'].includes(meta.e)) return null;
-        const previews = meta.p ?? [];
-        const best = previews[previews.length - 1];
-        const url = best?.u ?? meta.s?.u;
-        return typeof url === 'string' && url.startsWith('https://') ? url : null;
-      })
-      .filter(Boolean);
-    if (urls.length) return urls;
-  }
-  if (post.post_hint === 'image' && /\.(jpg|jpeg|png|gif|webp)(\?|$)/i.test(post.url ?? '')) {
-    return [post.url];
-  }
-  const src = post.preview?.images?.[0]?.source?.url;
-  if (typeof src === 'string' && src.startsWith('https://')) return [src];
-  return null;
+// ── RSS helpers ───────────────────────────────────────────────────────────────
+function decodeHtml(str) {
+  return str
+    .replace(/&amp;/g,  '&')
+    .replace(/&lt;/g,   '<')
+    .replace(/&gt;/g,   '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g,  "'")
+    .replace(/&#32;/g,  ' ')
+    .replace(/&nbsp;/g, ' ');
 }
 
-// ── Reddit fetch ──────────────────────────────────────────────────────────────
+// Strip HTML tags and decode entities to get plain text from RSS content.
+function rssContentToText(encoded) {
+  return decodeHtml(encoded)
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&[a-z#0-9]+;/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
+function parseRSSEntries(xml) {
+  return [...xml.matchAll(/<entry>([\s\S]*?)<\/entry>/g)].map(([, e]) => {
+    const title     = decodeHtml(e.match(/<title>([^<]*)<\/title>/)?.[1] ?? '');
+    const permalink = e.match(/<link[^>]+href="([^"]+)"/)?.[1] ?? '';
+    const subreddit = e.match(/<category term="([^"]+)"/)?.[1] ?? '';
+    const author    = e.match(/<name>\/u\/([^<]+)<\/name>/)?.[1] ?? '';
+    const rawId     = e.match(/<id>([^<]+)<\/id>/)?.[1] ?? '';
+    const content   = e.match(/<content[^>]*>([\s\S]*?)<\/content>/)?.[1] ?? '';
+
+    // Extract post_id from permalink (…/comments/POST_ID/title/)
+    const postId = permalink.split('/comments/')?.[1]?.split('/')?.[0] ?? '';
+
+    // Images from encoded HTML content
+    const images = [...content.matchAll(/&lt;img src=&quot;(https:\/\/[^&"]+)&quot;/g)]
+      .map(m => decodeHtml(m[1]).replace(/width=\d+/, 'width=1080'))
+      .filter(url => url.startsWith('https://'));
+
+    return {
+      title, subreddit, permalink, author, postId,
+      kind:     rawId.startsWith('t1_') ? 'comment' : 'post',
+      commentId: rawId.startsWith('t1_') ? rawId.slice(3) : null,
+      body:     rssContentToText(content),
+      over_18:  false,
+      stickied: /mod|automod/i.test(author),
+      spoiler:  false,
+      score:    100,
+      _images:  images,
+    };
+  });
+}
+
+async function redditRSS(url) {
+  const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.text();
+}
+
+// ── Reddit fetch (RSS-based) ──────────────────────────────────────────────────
 async function fetchHotPost(subreddit) {
-  const url = `${redditBase()}/r/${subreddit}/hot.json?limit=15&raw_json=1`;
   try {
-    const res = await fetch(url, { headers: redditHeaders() });
-    if (!res.ok) { console.error(`fetchHotPost(${subreddit}): HTTP ${res.status}`); return null; }
-    const data = await res.json();
-    const posts = (data?.data?.children ?? []).map(p => p.data);
-    return posts.find(isEligible) ?? null;
+    const xml   = await redditRSS(`https://www.reddit.com/r/${subreddit}/hot.rss`);
+    const posts = parseRSSEntries(xml).filter(e => e.kind === 'post');
+    return posts.find(p => isEligible(p)) ?? null;
   } catch (err) {
     console.error(`fetchHotPost(${subreddit}):`, err.message);
     return null;
@@ -211,13 +233,10 @@ async function fetchHotPost(subreddit) {
 }
 
 async function searchForPost(keyword, usedSubs, rng) {
-  const url = `${redditBase()}/search.json?q=${encodeURIComponent(keyword)}&sort=relevance&t=week&limit=25&raw_json=1`;
   try {
-    const res = await fetch(url, { headers: redditHeaders() });
-    if (!res.ok) return null;
-    const data = await res.json();
-    const posts = (data?.data?.children ?? []).map(p => p.data);
-    const eligible = posts.filter(p => !usedSubs.has(p.subreddit.toLowerCase()) && isEligible(p));
+    const xml   = await redditRSS(`https://www.reddit.com/search.rss?q=${encodeURIComponent(keyword)}&sort=relevance&t=week`);
+    const posts = parseRSSEntries(xml).filter(e => e.kind === 'post');
+    const eligible = posts.filter(p => p.subreddit && !usedSubs.has(p.subreddit.toLowerCase()) && isEligible(p));
     if (!eligible.length) return null;
     return eligible[Math.floor(rng() * Math.min(eligible.length, 5))];
   } catch (err) {
@@ -227,20 +246,18 @@ async function searchForPost(keyword, usedSubs, rng) {
 }
 
 async function fetchTopComments(subreddit, postId, seed) {
-  const url = `${redditBase()}/r/${subreddit}/comments/${postId}.json?sort=top&limit=25&raw_json=1`;
   try {
-    const res = await fetch(url, { headers: redditHeaders() });
-    if (!res.ok) return [];
-    const data = await res.json();
-    // data is [postListing, commentListing]
-    const commentChildren = data?.[1]?.data?.children ?? [];
-    const comments = commentChildren
-      .filter(c => c.kind === 't1' && isEligibleComment(c.data))
-      .map(c => ({
-        id: c.data.id,
-        body: c.data.body.trim().slice(0, 500),
-        score: c.data.score,
-        author: c.data.author,
+    const xml     = await redditRSS(`https://www.reddit.com/r/${subreddit}/comments/${postId}/.rss`);
+    const entries = parseRSSEntries(xml);
+
+    // RSS returns post as first entry (kind=post), then top-level comments
+    const comments = entries
+      .filter(e => e.kind === 'comment' && isEligibleComment(e.body, e.author))
+      .map(e => ({
+        id:     e.commentId,
+        body:   e.body.slice(0, 500),
+        score:  e.score,
+        author: e.author,
       }));
 
     if (comments.length < 4) {
@@ -248,9 +265,7 @@ async function fetchTopComments(subreddit, postId, seed) {
       return comments;
     }
 
-    // Seeded pick of 4 from top candidates (up to first 10 eligible)
-    const rng = mulberry32(seed);
-    const pool = comments.slice(0, 10);
+    const pool     = comments.slice(0, 10);
     const shuffled = seededShuffle(pool, seed);
     return shuffled.slice(0, 4);
   } catch (err) {
@@ -261,30 +276,35 @@ async function fetchTopComments(subreddit, postId, seed) {
 
 // ── Thread generation ─────────────────────────────────────────────────────────
 async function generateThread(date) {
-  // Use a different seed than the puzzle to get different subreddits
   const baseSeed = dateToSeed(date);
-  const seed = (baseSeed * 7 + 54321) >>> 0; // force unsigned 32-bit
-  const rng = mulberry32(seed);
+  const seed     = (baseSeed * 7 + 54321) >>> 0;
+  const rng      = mulberry32(seed);
   const shuffledPool = seededShuffle(DEFAULT_POOL, seed);
-  const rounds = [];
-  const usedSubs = new Set();
-  const keywordPool = [];
+  const rounds      = [];
+  const usedSubs    = new Set();
+  const seenTitles  = new Set();
+  const keywordPool  = [];
   const usedKeywords = new Set();
+
+  function normalizeTitle(t) { return cleanTitle(t).toLowerCase().replace(/[^a-z0-9]/g, ''); }
 
   // Step 1: seed from pool
   for (const sub of shuffledPool) {
     const post = await fetchHotPost(sub);
     if (!post) continue;
+    const norm = normalizeTitle(post.title);
+    if (seenTitles.has(norm)) continue;
     const display = cleanTitle(post.title);
     rounds.push({
-      subreddit: sub,
-      post_id: post.id,
-      post_title: display,
-      post_url: `https://reddit.com${post.permalink}`,
-      post_score: post.score,
-      post_images: extractImages(post),
+      subreddit:   sub,
+      post_id:     post.postId,
+      post_title:  display,
+      post_url:    post.permalink,
+      post_score:  post.score,
+      post_images: post._images.length ? post._images : null,
     });
     usedSubs.add(sub.toLowerCase());
+    seenTitles.add(normalizeTitle(post.title));
     keywordPool.push(...extractKeywords(display));
     console.error(`[seed] r/${sub} → "${display.slice(0, 60)}"`);
     break;
@@ -307,18 +327,21 @@ async function generateThread(date) {
     const post = await searchForPost(keyword, usedSubs, rng);
     if (!post) { console.error(`[chain] no eligible post for "${keyword}"`); continue; }
 
+    const norm = normalizeTitle(post.title);
+    if (seenTitles.has(norm)) { console.error(`[chain] skipping duplicate title for "${keyword}"`); continue; }
+
     const display = cleanTitle(post.title);
     rounds.push({
-      subreddit: post.subreddit,
-      post_id: post.id,
-      post_title: display,
-      post_url: `https://reddit.com${post.permalink}`,
-      post_score: post.score,
-      post_images: extractImages(post),
+      subreddit:   post.subreddit,
+      post_id:     post.postId,
+      post_title:  display,
+      post_url:    post.permalink,
+      post_score:  post.score,
+      post_images: post._images.length ? post._images : null,
     });
     usedSubs.add(post.subreddit.toLowerCase());
-    const newKeywords = extractKeywords(display);
-    keywordPool.push(...newKeywords);
+    seenTitles.add(norm);
+    keywordPool.push(...extractKeywords(display));
     console.error(`[chain] r/${post.subreddit} via "${keyword}" → "${display.slice(0, 60)}"`);
   }
 
@@ -333,12 +356,12 @@ async function generateThread(date) {
       await sleep(200);
       const display = cleanTitle(post.title);
       rounds.push({
-        subreddit: sub,
-        post_id: post.id,
-        post_title: display,
-        post_url: `https://reddit.com${post.permalink}`,
-        post_score: post.score,
-        post_images: extractImages(post),
+        subreddit:   sub,
+        post_id:     post.postId,
+        post_title:  display,
+        post_url:    post.permalink,
+        post_score:  post.score,
+        post_images: post._images.length ? post._images : null,
       });
       usedSubs.add(sub.toLowerCase());
     }
@@ -346,7 +369,7 @@ async function generateThread(date) {
 
   if (rounds.length < 4) throw new Error(`Only generated ${rounds.length}/4 rounds`);
 
-  // Step 3: Fetch 4 top comments for each post (retry with pool fallback if a post is dry)
+  // Step 3: Fetch 4 top comments per post
   console.error('[comments] fetching top comments for each post…');
   const verifiedRounds = [];
   for (let i = 0; i < rounds.length; i++) {
@@ -358,8 +381,7 @@ async function generateThread(date) {
       console.error(`[comments] r/${r.subreddit}: ${rounds[i].comments.length} comments`);
       verifiedRounds.push(rounds[i]);
     } else {
-      console.error(`[comments] r/${r.subreddit} only has ${comments.length} eligible comments — trying another post from pool`);
-      // Try to find a replacement post from the pool that hasn't been used
+      console.error(`[comments] r/${r.subreddit} only has ${comments.length} eligible comments — trying replacement`);
       const usedSubsNow = new Set(rounds.map(rr => rr.subreddit.toLowerCase()));
       let replaced = false;
       for (const sub of shuffledPool) {
@@ -368,35 +390,31 @@ async function generateThread(date) {
         const post = await fetchHotPost(sub);
         if (!post) continue;
         await sleep(500);
-        const altComments = await fetchTopComments(sub, post.id, seed + i * 9973 + 1);
+        const altComments = await fetchTopComments(sub, post.postId, seed + i * 9973 + 1);
         if (altComments.length < 4) continue;
         const display = cleanTitle(post.title);
-        const replacement = {
-          subreddit: sub,
-          post_id: post.id,
-          post_title: display,
-          post_url: `https://reddit.com${post.permalink}`,
-          post_images: extractImages(post),
-          comments: altComments.slice(0, 4),
-        };
-        verifiedRounds.push(replacement);
+        verifiedRounds.push({
+          subreddit:   sub,
+          post_id:     post.postId,
+          post_title:  display,
+          post_url:    post.permalink,
+          post_images: post._images.length ? post._images : null,
+          comments:    altComments.slice(0, 4),
+        });
         usedSubsNow.add(sub.toLowerCase());
         console.error(`[comments] replaced with r/${sub}`);
         replaced = true;
         break;
       }
-      if (!replaced) {
-        throw new Error(`Could not find 4 posts with enough eligible comments after retries`);
-      }
+      if (!replaced) throw new Error('Could not find 4 posts with enough eligible comments after retries');
     }
   }
+
   const rounds4 = verifiedRounds.slice(0, 4);
   if (rounds4.length < 4) throw new Error(`Only ${rounds4.length}/4 rounds with enough comments`);
 
-  // Step 4: Build shuffled_comments array (strips post_index for client; server retains it in KV)
-  const allComments = rounds4.flatMap((r, post_index) =>
-    r.comments.map(c => ({ ...c, post_index }))
-  );
+  // Step 4: Build shuffled_comments (post_index stripped for client)
+  const allComments     = rounds4.flatMap((r, post_index) => r.comments.map(c => ({ ...c, post_index })));
   const shuffled_comments = seededShuffle(allComments, seed + 7777);
 
   console.error(`[done] 4 posts, ${shuffled_comments.length} comments`);
@@ -404,12 +422,12 @@ async function generateThread(date) {
   return {
     date,
     rounds: rounds4.map(r => ({
-      subreddit: r.subreddit,
-      post_id: r.post_id,
-      post_title: r.post_title,
-      post_url: r.post_url,
+      subreddit:   r.subreddit,
+      post_id:     r.post_id,
+      post_title:  r.post_title,
+      post_url:    r.post_url,
       post_images: r.post_images,
-      comments: r.comments,
+      comments:    r.comments,
     })),
     shuffled_comments,
     generated_at: new Date().toISOString(),
@@ -424,10 +442,7 @@ async function writeToKV(date, puzzle) {
   const url = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/storage/kv/namespaces/${KV_NAMESPACE}/values/thread%3A${date}?expiration_ttl=${THREAD_TTL}`;
   const res = await fetch(url, {
     method: 'PUT',
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(puzzle),
   });
   const body = await res.json();
@@ -436,14 +451,13 @@ async function writeToKV(date, puzzle) {
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
-const args = process.argv.slice(2);
+const args     = process.argv.slice(2);
 const jsonOnly = args.includes('--json-only');
-const date = args.find(a => !a.startsWith('--')) ?? new Date().toISOString().slice(0, 10);
+const date     = args.find(a => !a.startsWith('--')) ?? new Date().toISOString().slice(0, 10);
 
 if (!jsonOnly) console.error(`[FindTheThread] Generating puzzle for ${date}`);
 
 try {
-  await initReddit();
   const puzzle = await generateThread(date);
   if (jsonOnly) {
     process.stdout.write(JSON.stringify(puzzle));

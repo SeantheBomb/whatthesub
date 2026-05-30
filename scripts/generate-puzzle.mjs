@@ -109,8 +109,8 @@ const TITLE_PREFIXES = [
   /^TIFU\s+by\s+/i,
   /^AITA\s+(for|if|that|when)\s+/i,
   /^AITA[?:,\s]/i,
-  /^WIBTA\s+(for|if)\s+/i,
-  /^WIBTA[?:,\s]/i,
+  /^WIBTAH?\s+(for|if)\s+/i,
+  /^WIBTAH?[?:,\s]/i,
   /^TIL\s+(that\s+)?/i,
   /^TIL[:\s,]/i,
   /^LPT\s*request?[:\s]/i,
@@ -163,7 +163,7 @@ function cleanTitle(title) {
   t = t.replace(/\s+/g, ' ');
   for (const pat of TITLE_PREFIXES) {
     const stripped = t.replace(pat, '').trim();
-    if (stripped.length >= 15) { t = stripped; break; }
+    if (stripped !== t && stripped.length >= 15) { t = stripped; break; }
   }
   return t.charAt(0).toUpperCase() + t.slice(1);
 }
