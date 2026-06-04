@@ -251,11 +251,15 @@ function parseRSSEntries(xml) {
     const author    = e.match(/<name>\/u\/([^<]+)<\/name>/)?.[1] ?? '';
     const content   = e.match(/<content[^>]*>([\s\S]*?)<\/content>/)?.[1] ?? '';
 
-    // Extract preview image URLs embedded in the encoded HTML content.
-    // Bump width param from 320 → 1080 for a sharper display image.
-    const images = [...content.matchAll(/&lt;img src=&quot;(https:\/\/[^&"]+)&quot;/g)]
-      .map(m => decodeHtml(m[1]).replace(/width=\d+/, 'width=1080'))
-      .filter(url => url.startsWith('https://'));
+    // Try to extract a direct i.redd.it image link first (no signature needed,
+    // full resolution). Falls back to the RSS preview thumbnail if not found.
+    // RSS double-encodes ampersands (&amp;amp;), so we double-decode those.
+    const directLink = content.match(/&lt;a href=&quot;(https:\/\/i\.redd\.it\/[^&"]+)&quot;&gt;\[link\]/)?.[1];
+    const images = directLink
+      ? [decodeHtml(directLink)]
+      : [...content.matchAll(/&lt;img src=&quot;(https:\/\/(?:(?!&quot;).)+)&quot;/g)]
+          .map(m => decodeHtml(decodeHtml(m[1])))
+          .filter(url => url.startsWith('https://'));
 
     return {
       title,

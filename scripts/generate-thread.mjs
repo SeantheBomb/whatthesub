@@ -195,10 +195,13 @@ function parseRSSEntries(xml) {
     // Extract post_id from permalink (…/comments/POST_ID/title/)
     const postId = permalink.split('/comments/')?.[1]?.split('/')?.[0] ?? '';
 
-    // Images from encoded HTML content
-    const images = [...content.matchAll(/&lt;img src=&quot;(https:\/\/[^&"]+)&quot;/g)]
-      .map(m => decodeHtml(m[1]).replace(/width=\d+/, 'width=1080'))
-      .filter(url => url.startsWith('https://'));
+    // Try direct i.redd.it link first (full res, no signature), else use thumbnail.
+    const directLink = content.match(/&lt;a href=&quot;(https:\/\/i\.redd\.it\/[^&"]+)&quot;&gt;\[link\]/)?.[1];
+    const images = directLink
+      ? [decodeHtml(directLink)]
+      : [...content.matchAll(/&lt;img src=&quot;(https:\/\/(?:(?!&quot;).)+)&quot;/g)]
+          .map(m => decodeHtml(decodeHtml(m[1])))
+          .filter(url => url.startsWith('https://'));
 
     return {
       title, subreddit, permalink, author, postId,
