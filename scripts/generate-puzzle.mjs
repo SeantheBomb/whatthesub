@@ -52,6 +52,15 @@ const SUBREDDIT_GIVEAWAYS = {
   explainlikeimfive:  ['eli5'],
   LifeProTips:        ['lpt'],
   changemyview:       ['cmv'],
+  // Sports league acronyms (too short for automatic token check)
+  nba:                ['nba'],
+  nfl:                ['nfl'],
+  nhl:                ['nhl'],
+  mlb:                ['mlb'],
+  ufc:                ['ufc', 'mma'],
+  mls:                ['mls'],
+  nba2k:              ['nba', '2k'],
+  cfb:                ['cfb'],
   // Era/topic giveaways
   '90s':              ['y2k', '1990s', "90's", '90s'],
   '80s':              ['1980s', "80's", '80s'],
@@ -127,6 +136,23 @@ const TITLE_PREFIXES = [
   /^Update[:\s]/i,
 ];
 
+// Meta/discussion thread patterns — these almost always name the fandom/team.
+const META_POST_RE = [
+  /\bdiscussion\s+thread\b/i,
+  /\bepisode\s+discussion\b/i,
+  /\bpost[- ]?episode\b/i,
+  /\bpost[- ]?game\b/i,
+  /\bgame\s+thread\b/i,
+  /\blive\s+(discussion|thread|chat)\b/i,
+  /\bmegathread\b/i,
+  /\bweekly\s+(discussion|thread|chat)\b/i,
+  /\bdaily\s+(discussion|thread|chat)\b/i,
+  /\bseries\s+finale\b/i,
+  /\bs\d{1,2}\s*[ex]\s*\d{1,2}\b/i,        // S9E1, S05x08
+  /\bseason\s+\d+[^a-z]*episode\s+\d+\b/i, // "Season 5 Episode 8"
+  /^\[(?!OC\]|Serious\]|Update\])[^\]]{2,}\]/i, // [Highlight], [Trade], [Report], etc.
+];
+
 // ── PRNG ──────────────────────────────────────────────────────────────────────
 function mulberry32(seed) {
   return function () {
@@ -177,6 +203,29 @@ function extractKeywords(title) {
   return [...new Set(words)];
 }
 
+// Break a subreddit name into meaningful words to check against post titles.
+// Handles CamelCase (TheBoys→["boys"]), underscores (real_housewives),
+// and embedded connectors in all-lowercase names (rickandmorty→["rick","morty"]).
+function subWordTokens(subreddit) {
+  let s = subreddit
+    .replace(/_+/g, ' ')                       // underscores
+    .replace(/([a-z])([A-Z])/g, '$1 $2')       // camelCase split
+    .replace(/([A-Z]{2,})([A-Z][a-z])/g, '$1 $2') // ACRONYMWord
+    .toLowerCase();
+  // For still-contiguous long tokens, try splitting on embedded connector words
+  s = s.replace(/[a-z]{6,}/g, tok =>
+    tok.replace(/(and|the|of)/g, ' $1 ')
+  );
+  // Short subreddits (≤4 alpha chars: nba, AIO, DIY) use 3-char minimum so
+  // the acronym itself is checked against the title.
+  const minLen = subreddit.replace(/[^a-z]/gi, '').length <= 4 ? 3 : 4;
+  return [...new Set(
+    s.split(/\s+/)
+     .map(w => w.replace(/[^a-z]/g, ''))
+     .filter(w => w.length >= minLen && !STOP_WORDS.has(w))
+  )];
+}
+
 // ── Jaccard similarity ────────────────────────────────────────────────────────
 // Operates on Sets of keyword strings.
 // Returns 0 when both sets are empty; 1 when identical.
@@ -196,7 +245,7 @@ function isEligible(post) {
   if (post.over_18 || post.stickied || post.spoiler) return false;
   if (BLOCKLIST.has(sub)) return false;
   if (post.score < 50) return false;
-  if (post.title.length < 20 || post.title.length > 300) return false;
+  if (post.title.length < 20 || post.title.length > 150) return false;
 
   // Require a real post URL (must contain /comments/) and a non-empty subreddit
   if (!sub) return false;
@@ -205,15 +254,27 @@ function isEligible(post) {
   // Reject if the post explicitly names its own subreddit
   if (title.includes(`r/${sub}`) || title.includes(`/r/${sub}`)) return false;
 
-  // Reject if any known giveaway term appears as a whole word/token in the title.
-  // Look up by original-case name AND lowercase, so the dict keys can be written
-  // in either style (e.g. 'AmItheAsshole' or 'amitheasshole').
+  // Reject episode/game/season discussion threads — they almost always name the fandom
+  for (const re of META_POST_RE) {
+    if (re.test(post.title)) return false;
+  }
+
+  // Reject if any meaningful word from the subreddit name appears in the title.
+  // Handles CamelCase (TheBoys→"boys"), underscores, and embedded connectors
+  // (rickandmorty→"rick","morty"). Trailing s is optional to catch possessives
+  // ("widows" token matches "widow's bay"). Whole-word, case-insensitive.
+  for (const tok of subWordTokens(post.subreddit)) {
+    const stem = tok.endsWith('s') ? tok.slice(0, -1) : tok;
+    const re = new RegExp(`(?<![a-z0-9])${stem}s?(?![a-z0-9])`, 'i');
+    if (re.test(title)) return false;
+  }
+
+  // Reject if any known explicit giveaway term appears in the title.
   const giveaways = [
     ...(SUBREDDIT_GIVEAWAYS[post.subreddit] ?? []),
     ...(SUBREDDIT_GIVEAWAYS[sub]             ?? []),
   ];
   for (const term of giveaways) {
-    // Whole-word boundary match, case-insensitive
     const re = new RegExp(`(?<![a-z0-9])${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![a-z0-9])`, 'i');
     if (re.test(title)) return false;
   }

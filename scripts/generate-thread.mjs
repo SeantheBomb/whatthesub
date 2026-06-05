@@ -86,6 +86,23 @@ const TITLE_PREFIXES = [
   /^\[Discussion\]\s*/i, /^Update[:\s]/i,
 ];
 
+// Meta/discussion thread patterns — these almost always name the fandom/team.
+const META_POST_RE = [
+  /\bdiscussion\s+thread\b/i,
+  /\bepisode\s+discussion\b/i,
+  /\bpost[- ]?episode\b/i,
+  /\bpost[- ]?game\b/i,
+  /\bgame\s+thread\b/i,
+  /\blive\s+(discussion|thread|chat)\b/i,
+  /\bmegathread\b/i,
+  /\bweekly\s+(discussion|thread|chat)\b/i,
+  /\bdaily\s+(discussion|thread|chat)\b/i,
+  /\bseries\s+finale\b/i,
+  /\bs\d{1,2}\s*[ex]\s*\d{1,2}\b/i,
+  /\bseason\s+\d+[^a-z]*episode\s+\d+\b/i,
+  /^\[(?!OC\]|Serious\]|Update\])[^\]]{2,}\]/i,
+];
+
 // ── PRNG ──────────────────────────────────────────────────────────────────────
 function mulberry32(seed) {
   return function () {
@@ -132,6 +149,23 @@ function extractKeywords(title) {
   return [...new Set(words)];
 }
 
+function subWordTokens(subreddit) {
+  let s = subreddit
+    .replace(/_+/g, ' ')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]{2,})([A-Z][a-z])/g, '$1 $2')
+    .toLowerCase();
+  s = s.replace(/[a-z]{6,}/g, tok =>
+    tok.replace(/(and|the|of)/g, ' $1 ')
+  );
+  const minLen = subreddit.replace(/[^a-z]/gi, '').length <= 4 ? 3 : 4;
+  return [...new Set(
+    s.split(/\s+/)
+     .map(w => w.replace(/[^a-z]/g, ''))
+     .filter(w => w.length >= minLen && !STOP_WORDS.has(w))
+  )];
+}
+
 function isEligible(post) {
   if (!post) return false;
   const sub   = (post.subreddit ?? '').toLowerCase();
@@ -143,6 +177,17 @@ function isEligible(post) {
   if (THREAD_COMMENT_BLOCKLIST.has(sub) || THREAD_COMMENT_BLOCKLIST.has(post.subreddit)) return false;
   if ((post.title?.length ?? 0) < 20 || (post.title?.length ?? 0) > 300) return false;
   if (title.includes(`r/${sub}`) || title.includes(`/r/${sub}`)) return false;
+  // Reject episode/game discussion threads — they almost always name the fandom
+  for (const re of META_POST_RE) {
+    if (re.test(post.title)) return false;
+  }
+  // Reject if any meaningful word from the subreddit name appears in the title.
+  // Trailing s is optional to catch possessives ("widows" matches "widow's bay").
+  for (const tok of subWordTokens(post.subreddit)) {
+    const stem = tok.endsWith('s') ? tok.slice(0, -1) : tok;
+    const re = new RegExp(`(?<![a-z0-9])${stem}s?(?![a-z0-9])`, 'i');
+    if (re.test(title)) return false;
+  }
   return true;
 }
 
