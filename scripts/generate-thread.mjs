@@ -262,10 +262,20 @@ function parseRSSEntries(xml) {
   });
 }
 
-async function redditRSS(url) {
-  const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.text();
+async function redditRSS(url, retries = 3) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
+    if (res.status === 429) {
+      if (attempt === retries) throw new Error(`HTTP 429`);
+      const retryAfter = parseInt(res.headers.get('Retry-After') || '0', 10);
+      const wait = retryAfter > 0 ? retryAfter * 1000 : Math.pow(2, attempt + 1) * 2000;
+      console.error(`[rate-limit] 429 — waiting ${wait}ms before retry ${attempt + 1}/${retries}`);
+      await sleep(wait);
+      continue;
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.text();
+  }
 }
 
 // ── Reddit fetch (RSS-based) ──────────────────────────────────────────────────
@@ -339,7 +349,7 @@ async function generateThread(date) {
   // Step 1: seed from pool
   for (const sub of shuffledPool) {
     const post = await fetchHotPost(sub);
-    if (!post) continue;
+    if (!post) { await sleep(600); continue; }
     const norm = normalizeTitle(post.title);
     if (seenTitles.has(norm)) continue;
     const display = cleanTitle(post.title);
