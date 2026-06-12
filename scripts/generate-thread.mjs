@@ -262,20 +262,13 @@ function parseRSSEntries(xml) {
   });
 }
 
-async function redditRSS(url, retries = 3) {
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
-    if (res.status === 429) {
-      if (attempt === retries) throw new Error(`HTTP 429`);
-      const retryAfter = parseInt(res.headers.get('Retry-After') || '0', 10);
-      const wait = retryAfter > 0 ? retryAfter * 1000 : Math.pow(2, attempt + 1) * 2000;
-      console.error(`[rate-limit] 429 — waiting ${wait}ms before retry ${attempt + 1}/${retries}`);
-      await sleep(wait);
-      continue;
-    }
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.text();
-  }
+class RateLimitError extends Error { constructor() { super('HTTP 429'); this.isRateLimit = true; } }
+
+async function redditRSS(url) {
+  const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
+  if (res.status === 429) throw new RateLimitError();
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.text();
 }
 
 // ── Reddit fetch (RSS-based) ──────────────────────────────────────────────────
@@ -285,6 +278,7 @@ async function fetchHotPost(subreddit) {
     const posts = parseRSSEntries(xml).filter(e => e.kind === 'post');
     return posts.find(p => isEligible(p)) ?? null;
   } catch (err) {
+    if (err.isRateLimit) throw err;
     console.error(`fetchHotPost(${subreddit}):`, err.message);
     return null;
   }
@@ -347,9 +341,23 @@ async function generateThread(date) {
   function normalizeTitle(t) { return cleanTitle(t).toLowerCase().replace(/[^a-z0-9]/g, ''); }
 
   // Step 1: seed from pool
+  let rateLimitWaited = false;
   for (const sub of shuffledPool) {
-    const post = await fetchHotPost(sub);
-    if (!post) { await sleep(600); continue; }
+    let post;
+    try {
+      post = await fetchHotPost(sub);
+    } catch (err) {
+      if (err.isRateLimit && !rateLimitWaited) {
+        console.error(`[rate-limit] 429 — waiting 65s for rate limit to clear`);
+        await sleep(65000);
+        rateLimitWaited = true;
+        try { post = await fetchHotPost(sub); } catch { post = null; }
+      } else {
+        console.error(`fetchHotPost(${sub}):`, err.message);
+        post = null;
+      }
+    }
+    if (!post) { await sleep(400); continue; }
     const norm = normalizeTitle(post.title);
     if (seenTitles.has(norm)) continue;
     const display = cleanTitle(post.title);
