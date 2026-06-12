@@ -337,11 +337,21 @@ function parseRSSEntries(xml) {
   });
 }
 
-class RateLimitError extends Error { constructor() { super('HTTP 429'); this.isRateLimit = true; } }
+// One global 65s wait per script run — clears the IP rate-limit window.
+let _rateLimitWaitDone = false;
 
 async function redditRSS(url) {
-  const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
-  if (res.status === 429) throw new RateLimitError();
+  const doFetch = () => fetch(url, { headers: { 'User-Agent': USER_AGENT } });
+  let res = await doFetch();
+  if (res.status === 429 && !_rateLimitWaitDone) {
+    _rateLimitWaitDone = true;
+    const retryAfter = parseInt(res.headers.get('Retry-After') || '0', 10);
+    const wait = Math.max(retryAfter * 1000, 65000);
+    console.error(`[rate-limit] 429 — waiting ${wait / 1000}s for IP rate limit to clear`);
+    await sleep(wait);
+    res = await doFetch();
+  }
+  if (res.status === 429) throw new Error('HTTP 429');
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.text();
 }
@@ -354,7 +364,6 @@ async function fetchHotPost(subreddit) {
     const posts = parseRSSEntries(xml);
     return posts.find(p => p.subreddit && isEligible(p)) ?? null;
   } catch (err) {
-    if (err.isRateLimit) throw err;  // propagate up so pool loop can wait once
     console.error(`fetchHotPost(${subreddit}):`, err.message);
     return null;
   }
@@ -488,22 +497,8 @@ async function generatePuzzle(date) {
   const usedKeywords = new Set();
 
   // Step 1: seed from pool
-  let rateLimitWaited = false;
   for (const sub of shuffledPool) {
-    let post;
-    try {
-      post = await fetchHotPost(sub);
-    } catch (err) {
-      if (err.isRateLimit && !rateLimitWaited) {
-        console.error(`[rate-limit] 429 — waiting 65s for rate limit to clear`);
-        await sleep(65000);
-        rateLimitWaited = true;
-        try { post = await fetchHotPost(sub); } catch { post = null; }
-      } else {
-        console.error(`fetchHotPost(${sub}):`, err.message);
-        post = null;
-      }
-    }
+    const post = await fetchHotPost(sub);
     if (!post) { await sleep(400); continue; }
     const display = cleanTitle(post.title);
     rounds.push({

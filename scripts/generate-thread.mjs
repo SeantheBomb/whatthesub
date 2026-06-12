@@ -262,11 +262,21 @@ function parseRSSEntries(xml) {
   });
 }
 
-class RateLimitError extends Error { constructor() { super('HTTP 429'); this.isRateLimit = true; } }
+// One global 65s wait per script run — clears the IP rate-limit window.
+let _rateLimitWaitDone = false;
 
 async function redditRSS(url) {
-  const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
-  if (res.status === 429) throw new RateLimitError();
+  const doFetch = () => fetch(url, { headers: { 'User-Agent': USER_AGENT } });
+  let res = await doFetch();
+  if (res.status === 429 && !_rateLimitWaitDone) {
+    _rateLimitWaitDone = true;
+    const retryAfter = parseInt(res.headers.get('Retry-After') || '0', 10);
+    const wait = Math.max(retryAfter * 1000, 65000);
+    console.error(`[rate-limit] 429 — waiting ${wait / 1000}s for IP rate limit to clear`);
+    await sleep(wait);
+    res = await doFetch();
+  }
+  if (res.status === 429) throw new Error('HTTP 429');
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.text();
 }
@@ -278,7 +288,6 @@ async function fetchHotPost(subreddit) {
     const posts = parseRSSEntries(xml).filter(e => e.kind === 'post');
     return posts.find(p => isEligible(p)) ?? null;
   } catch (err) {
-    if (err.isRateLimit) throw err;
     console.error(`fetchHotPost(${subreddit}):`, err.message);
     return null;
   }
@@ -341,22 +350,8 @@ async function generateThread(date) {
   function normalizeTitle(t) { return cleanTitle(t).toLowerCase().replace(/[^a-z0-9]/g, ''); }
 
   // Step 1: seed from pool
-  let rateLimitWaited = false;
   for (const sub of shuffledPool) {
-    let post;
-    try {
-      post = await fetchHotPost(sub);
-    } catch (err) {
-      if (err.isRateLimit && !rateLimitWaited) {
-        console.error(`[rate-limit] 429 — waiting 65s for rate limit to clear`);
-        await sleep(65000);
-        rateLimitWaited = true;
-        try { post = await fetchHotPost(sub); } catch { post = null; }
-      } else {
-        console.error(`fetchHotPost(${sub}):`, err.message);
-        post = null;
-      }
-    }
+    const post = await fetchHotPost(sub);
     if (!post) { await sleep(400); continue; }
     const norm = normalizeTitle(post.title);
     if (seenTitles.has(norm)) continue;
